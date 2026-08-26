@@ -1,0 +1,42 @@
+environment:
+  grid_size: 50
+  n_agents: 5
+  n_targets: 10
+  obs_radius: 5
+  comm_radius: 10
+  max_battery: 500
+  max_steps: 500
+  dynamic_target_ratio: 0.33
+
+rewards:
+  coverage: 2.0
+  detection: 5.0
+  collision: -3.0
+  redundancy: -0.5
+  battery_per_step: -0.1
+  cooperative_alpha: 0.3
+
+maddpg:
+  gamma: 0.99
+  tau: 0.01
+  lr_actor: 0.00015
+  lr_critic: 0.0003
+  batch_size: 256
+  buffer_capacity: 1000000
+  update_frequency: 10
+  hidden_actor: 128
+  hidden_critic: 256
+  noise_start: 0.3
+  noise_end: 0.05
+  noise_decay: 0.997
+
+training:
+  n_episodes: 1500
+  save_frequency: 100
+  log_frequency: 50
+  checkpoint_dir: checkpoints/
+  log_dir: logs/
+
+evaluation:
+  n_test_episodes: 100
+  render: false

@@ -1,0 +1,9 @@
+venv/
+checkpoints/
+logs/
+*.pt
+*.pth
+runs/
+__pycache__/
+*.pyc
+.env
