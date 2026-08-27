@@ -30,8 +30,39 @@ The intelligence behind the system comes from **Multi-Agent Deep Deterministic P
 - **Real-Time Visualization** — Pygame dashboard showing drone movement, explored areas, and battery levels *(in progress)*
 
 ---
+## Project Structure
 
-
+```text
+uav-swarm-maddpg/
+│
+├── env/ # Forest World (Part A)
+│ ├── constants.py # Shared constants — OBS_DIM, cell types, etc.
+│ ├── grid.py # Grid creation, obstacles, targets, coverage map
+│ ├── uav.py # Single UAV: movement, battery, sensing
+│ └── forest_env.py # Main Gym environment: reset(), step(), rewards
+│
+├── agents/ # Learning Algorithm (Part B)
+│ ├── actor.py # Actor neural network — drone brain
+│ ├── critic.py # Centralized Critic — team evaluator
+│ ├── replay_buffer.py # Experience memory storage
+│ ├── noise.py # Ornstein-Uhlenbeck exploration noise
+│ └── maddpg.py # Full MADDPG algorithm
+│
+├── planning/
+│ └── voronoi_planner.py # Voronoi region assignment + dynamic reassignment
+│
+├── training/
+│ └── train.py # 1500-episode training loop with logging
+│
+├── evaluation/ # Baseline comparison and metrics (in progress)
+├── visualization/ # Pygame dashboard and training charts (in progress)
+├── tests/
+│ └── test_env.py # 63 unit tests for environment
+│
+├── configs/
+│ └── default.yaml # All hyperparameters
+└── main.py # Entry point
+```
 ---
 
 ## How It Works
