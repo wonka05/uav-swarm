@@ -1,110 +1,186 @@
-# UAV Swarm Simulation using MADDPG
+# UAV Swarm Surveillance System
 
-A multi-agent reinforcement learning framework for autonomous UAV swarm coordination in a simulated environment.
+> Agentic AI Based System for Cooperative UAV Swarm using Multi-Agent Deep Reinforcement Learning (MADDPG)
 
-This project focuses on developing a cooperative UAV swarm using Multi-Agent Deep Deterministic Policy Gradient (MADDPG). The system is designed to enable multiple UAV agents to learn coordinated behavior while operating in a shared environment containing obstacles and mission targets.
-
-> **Project Status:** This project is currently under active development.
+![Status](https://img.shields.io/badge/Status-In%20Progress-yellow)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-orange)
+![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
 ## Overview
 
-Coordinating multiple UAVs in a shared environment requires agents to make decisions while considering both their individual states and the actions of other agents.
+This project implements an intelligent UAV (drone) swarm system for autonomous forest surveillance. Five cooperative drone agents learn to coordinate their movements, divide the forest into territories, detect targets such as wildlife and fire hotspots, and avoid collisions — without any human control during operation.
 
-This project explores a Multi-Agent Reinforcement Learning (MARL) approach using MADDPG to enable UAVs to learn cooperative navigation and decision-making policies.
-
-The simulation environment provides a controlled setting for developing, training, and evaluating swarm behavior.
-
-The project focuses on:
-
-- Multi-agent UAV coordination
-- Reinforcement learning using MADDPG
-- Cooperative decision-making
-- Obstacle-aware navigation
-- Environment and state representation
-- Training and evaluation of learned policies
-- Simulation-based performance analysis
+The intelligence behind the system comes from **Multi-Agent Deep Deterministic Policy Gradient (MADDPG)**, a state-of-the-art cooperative reinforcement learning algorithm. A **Voronoi-based Agentic Planning Layer** provides structured mission assignments before each episode, giving the learning algorithm a clean starting point and reducing redundant coverage.
 
 ---
 
-## Objectives
+## Key Features
 
-The primary objectives of this project are:
-
-1. Develop a simulated environment for multiple UAV agents.
-2. Model UAV movement and interaction within a shared grid environment.
-3. Incorporate obstacles and mission targets into the environment.
-4. Design suitable observations, actions, states, and rewards for multi-agent reinforcement learning.
-5. Implement the MADDPG algorithm for cooperative UAV control.
-6. Train multiple UAV agents to learn coordinated behavior.
-7. Evaluate learned policies using relevant performance metrics.
-8. Develop a modular and extensible framework for experimentation.
+- **Cooperative Multi-Agent RL** — 5 UAV agents learn coordinated surveillance behavior through MADDPG
+- **Custom OpenAI Gym Environment** — 50×50 grid-based forest simulation with obstacles, dynamic targets, and battery constraints
+- **Agentic Planning Layer** — Voronoi partitioning assigns non-overlapping territories to each drone before each episode
+- **Centralized Training, Decentralized Execution (CTDE)** — Critic uses global information during training; Actor runs locally on each drone during deployment
+- **Parameter Sharing** — All 5 actors share one network, enabling stable training beyond the standard 2–3 agent limit
+- **Coverage-Grid Reward** — Reward function directly aligned with the surveillance objective
+- **Dynamic Target Tracking** — One-third of targets follow random-walk movement, simulating real wildlife behavior
+- **TensorBoard Logging** — Live training metrics including reward, coverage rate, and loss curves
+- **Real-Time Visualization** — Pygame dashboard showing drone movement, explored areas, and battery levels *(in progress)*
 
 ---
 
-## Technology Stack
 
-| Technology | Purpose |
+---
+
+## How It Works
+
+### Reinforcement Learning Foundation
+
+Each drone is an RL agent operating in a shared environment. The agent observes its local state, takes an action, and receives a reward signal that guides learning over thousands of episodes.
+
+| Concept | In This Project |
 |---|---|
-| Python | Core programming language |
-| PyTorch | Deep learning and neural network implementation |
-| NumPy | Numerical computations |
-| SciPy | Scientific computing |
-| Gymnasium | Reinforcement learning environment interface |
-| Pygame | Simulation and visualization |
-| Matplotlib | Data visualization |
-| Pandas | Data analysis |
-| TensorBoard | Training monitoring |
-| PyYAML | Configuration management |
-| tqdm | Progress tracking |
-| Seaborn | Statistical visualization |
+| Agent | A single UAV drone |
+| Environment | 50×50 forest grid simulation |
+| State | Local grid patch, battery, neighbours, visible targets (172 dims) |
+| Action | Continuous velocity [vx, vy] in [-1, 1] |
+| Reward | +2.0 new cell, +5.0 target detected, -3.0 collision, -0.5 redundant |
+| Goal | Maximize total coverage and target detection across the episode |
+
+### MADDPG — Centralized Training, Decentralized Execution
+
+| | Training | Deployment |
+|---|---|---|
+| Actor input | Local observation (172 numbers) | Local observation (same) |
+| Critic input | ALL 5 observations + ALL 5 actions (870 numbers) | Not used |
+| Communication | Required | Not required |
+
+### Observation Vector (172 dimensions)
+
+| Component | Calculation | Dimensions |
+|---|---|---|
+| Local grid patch | (2×5+1)² = 11² flattened | 121 |
+| Own state | x, y, vx, vy, battery | 5 |
+| Neighbour info | 4 neighbours × 4 values | 16 |
+| Target info | 10 targets × 3 values | 30 |
+| **Total** | | **172** |
 
 ---
 
-## Project Structure
+## Tech Stack
 
-```text
-uav-swarm/
-│
-├── agents/
-│   └── # UAV agents and MADDPG components
-│
-├── configs/
-│   └── default.yaml
-│
-├── env/
-│   ├── constants.py
-│   └── # Environment and UAV components
-│
-├── evaluation/
-│   └── # Evaluation and performance analysis
-│
-├── planning/
-│   └── # Path planning and navigation
-│
-├── tests/
-│   └── # Unit and integration tests
-│
-├── training/
-│   └── # Training pipeline and experiment components
-│
-├── visualization/
-│   └── # Simulation and training visualization
-│
-├── checkpoints/
-│   └── # Saved model checkpoints
-│
-├── logs/
-│   └── # Training and experiment logs
-│
-├── assets/
-│   └── # Project assets
-│
-├── notebooks/
-│   └── # Experimental notebooks
-│
-├── main.py
-├── requirements.txt
-├── .gitignore
-└── README.md
+| Library | Version | Purpose |
+|---|---|---|
+| Python | 3.10+ | Core language |
+| PyTorch | 2.0+ | Neural networks and training |
+| OpenAI Gym | 0.21.0 | Environment interface |
+| NumPy | 1.24+ | Grid operations and math |
+| SciPy | 1.10+ | Voronoi partitioning (KDTree) |
+| Pygame | 2.3+ | Real-time visualization |
+| Matplotlib | 3.7+ | Training analytics |
+| Pandas | 2.0+ | Metrics logging |
+| TensorBoard | 2.13+ | Live training monitoring |
+| PyYAML | 6.0+ | Config management |
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.10 or higher
+- Git
+
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/wonka05/uav-swarm-maddpg.git
+cd uav-swarm-maddpg
+
+# Create virtual environment
+python -m venv venv
+
+# Activate (Windows)
+venv\Scripts\activate
+
+# Activate (Mac/Linux)
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### Verify Setup
+
+```bash
+python -c "from env.constants import OBS_DIM; print('OBS_DIM:', OBS_DIM)"
+# Expected output: OBS_DIM: 172
+```
+
+### Run Training 
+
+```bash
+python main.py --mode train
+```
+
+### Run Evaluation 
+
+```bash
+python main.py --mode evaluate --checkpoint checkpoints/maddpg_best.pt
+```
+
+### Run Visualization 
+
+```bash
+python main.py --mode render --checkpoint checkpoints/maddpg_best.pt
+```
+
+---
+
+## Expected Results
+
+| Metric | Random Walk | Standard MADDPG | Our System (Target) |
+|---|---|---|---|
+| Coverage Rate | ~15% | ~55% | > 85% |
+| Target Detection | ~20% | ~60% | > 85% |
+| Collision Rate | ~8.0 | ~2.0 | < 0.5 |
+| Redundancy Rate | ~70% | ~35% | < 10% |
+
+---
+
+## Development Progress
+
+### Stage 1 — *(In Progress)*
+
+- [x] Project structure and repository setup
+- [x] `env/constants.py` — shared constants
+- [x] `configs/default.yaml` — hyperparameters
+- [ ] `env/grid.py` — forest grid and coverage map
+- [ ] `env/uav.py` — UAV physics and sensing
+- [ ] `env/forest_env.py` — complete Gym environment
+- [ ] `agents/replay_buffer.py` — experience memory
+- [ ] `agents/actor.py` — Actor neural network
+- [ ] `agents/critic.py` — Critic neural network
+- [ ] `agents/noise.py` — OU exploration noise
+- [ ] `agents/maddpg.py` — full MADDPG algorithm
+- [ ] `planning/voronoi_planner.py` — region assignment
+- [ ] `tests/test_env.py` — 63 unit tests
+
+### Stage 2 — *(Planned)*
+
+- [ ] `training/train.py` — 1500-episode training loop
+- [ ] Full training run with TensorBoard logging
+- [ ] Baseline comparison (Random Walk, Greedy, Standard MADDPG)
+- [ ] Ablation study (no planning layer, no cooperative reward)
+
+### Stage 3 — *(Planned)*
+
+- [ ] `evaluation/` — metrics and comparison table
+- [ ] `visualization/pygame_render.py` — real-time dashboard
+- [ ] `visualization/plot_metrics.py` — training charts
+- [ ] Final report and demo
+
+---
