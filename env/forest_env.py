@@ -8,6 +8,7 @@ from env.constants import (
     N_TARGETS,
     ACTION_DIM,
     MAX_STEPS,
+    FREE
 )
 
 from env.grid import (
@@ -177,6 +178,31 @@ class ForestEnv(gym.Env):
 
         return observations, info
 
+    def _collect_targets(self):
+        collected = 0
+        remaining_targets = []
+
+        for target in self.target_positions:
+            target_x, target_y = target
+            found = False
+
+            for uav in self.uavs:
+                uav_x = int(round(uav.pos[0]))
+                uav_y = int(round(uav.pos[1]))
+
+                if uav_x == target_x and uav_y == target_y:
+                    found = True
+                    collected += 1
+                    self.grid[target_y, target_x] = FREE
+                    break
+
+            if not found:
+                remaining_targets.append(target)
+
+        self.target_positions = remaining_targets
+
+        return collected
+
     def step(self, actions):
         actions = np.asarray(actions, dtype=np.float32)
 
@@ -197,6 +223,10 @@ class ForestEnv(gym.Env):
                     uav.pos[0],
                     uav.pos[1],
                 )
+
+        # Collect targets reached by UAVs
+        collected_targets = self._collect_targets()
+        reward += float(collected_targets)
 
         # Detect visible targets
         targets_detected = 0
@@ -229,10 +259,11 @@ class ForestEnv(gym.Env):
         truncated = self.current_step >= MAX_STEPS
 
         info = {
-            "coverage_rate": coverage_rate,
-            "targets_detected": targets_detected,
-            "collision_count": self.collision_count,
-            "active_agents": active_agents,
+        "coverage_rate": coverage_rate,
+        "targets_detected": targets_detected,
+        "collected_targets": collected_targets,
+        "collision_count": self.collision_count,
+        "active_agents": active_agents,
         }
 
         return (
