@@ -208,15 +208,59 @@ class ForestEnv(gym.Env):
 
         reward = 0.0
 
-        # Move each UAV
+        # Move each UAV while preventing UAV-to-UAV collisions
         for i, uav in enumerate(self.uavs):
-            moved = uav.move(actions[i], self.grid)
+            action = np.asarray(actions[i], dtype=np.float32)
 
-            if not moved:
+            # Inactive UAVs do not move
+            if not uav.is_active:
+                continue
+
+            # Zero action = remain stationary
+            if np.allclose(action, 0.0):
+                uav.vel = np.zeros(2, dtype=np.float32)
+                mark_visited(
+                    self.coverage_map,
+                    uav.pos[0],
+                    uav.pos[1],
+                )
+                continue
+
+            old_pos = uav.pos.copy()
+
+            # Check whether another UAV already occupies the destination
+            proposed_pos = old_pos + action
+            proposed_cell = (
+                int(round(proposed_pos[0])),
+                int(round(proposed_pos[1])),
+            )
+
+            occupied_by_other = False
+
+            for j, other in enumerate(self.uavs):
+                if i == j or not other.is_active:
+                    continue
+
+                other_cell = (
+                    int(round(other.pos[0])),
+                    int(round(other.pos[1])),
+                )
+
+                if proposed_cell == other_cell:
+                    occupied_by_other = True
+                    break
+
+            if occupied_by_other:
+                uav.vel = np.zeros(2, dtype=np.float32)
                 self.collision_count += 1
                 reward -= 1.0
+            else:
+                moved = uav.move(action, self.grid)
 
-            # Mark visited position
+                if not moved:
+                    self.collision_count += 1
+                    reward -= 1.0
+
             if uav.is_active:
                 mark_visited(
                     self.coverage_map,
