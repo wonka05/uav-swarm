@@ -189,16 +189,16 @@ python main.py --mode render --checkpoint checkpoints/maddpg_best.pt
 - [x] Project structure and repository setup
 - [x] `env/constants.py` — shared constants
 - [x] `configs/default.yaml` — hyperparameters
-- [ ] `env/grid.py` — forest grid and coverage map
-- [ ] `env/uav.py` — UAV physics and sensing
-- [ ] `env/forest_env.py` — complete Gym environment
+- [x] `env/grid.py` — forest grid and coverage map
+- [x] `env/uav.py` — UAV physics and sensing
+- [x] `env/forest_env.py` — complete Gym environment
 - [ ] `agents/replay_buffer.py` — experience memory
 - [ ] `agents/actor.py` — Actor neural network
 - [ ] `agents/critic.py` — Critic neural network
 - [ ] `agents/noise.py` — OU exploration noise
 - [ ] `agents/maddpg.py` — full MADDPG algorithm
 - [ ] `planning/voronoi_planner.py` — region assignment
-- [ ] `tests/test_env.py` — 63 unit tests
+- [x] `tests/test_env.py` — 63 unit tests
 
 ### Stage 2 — *(Planned)*
 
