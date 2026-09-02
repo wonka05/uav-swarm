@@ -1,3 +1,4 @@
+# MUST BE IN ROOT 
 import numpy as np
 from planning.voronoi_planner import VoronoiPlanner
 
