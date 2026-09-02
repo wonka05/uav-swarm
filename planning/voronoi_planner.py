@@ -3,12 +3,22 @@ import numpy as np
 
 class VoronoiPlanner:
     def __init__(self, grid_size=50, n_agents=5):
+        if grid_size <= 0:
+            raise ValueError("grid_size must be positive")
+
+        if n_agents <= 0:
+            raise ValueError("n_agents must be positive")
+
         self.grid_size = grid_size
         self.n_agents = n_agents
+
+        rows, cols = np.indices((grid_size, grid_size))
+        self.grid_points = np.stack((rows, cols), axis=-1).astype(np.float32)
+
         self.regions = [set() for _ in range(n_agents)]
 
-    def assign_regions(self, agent_positions):
-        agent_positions = np.asarray(agent_positions)
+    def _validate_agent_positions(self, agent_positions):
+        agent_positions = np.asarray(agent_positions, dtype=np.float32)
 
         if agent_positions.shape != (self.n_agents, 2):
             raise ValueError(
@@ -16,55 +26,39 @@ class VoronoiPlanner:
                 f"({self.n_agents}, 2)"
             )
 
-        # Create coordinates for every cell in the grid
-        rows, cols = np.indices(
-            (self.grid_size, self.grid_size)
-        )
+        return agent_positions
 
-        # Store coordinates as (row, col)
-        grid_points = np.stack(
-            (rows, cols),
-            axis=-1
-        )
+    def _validate_agent_index(self, agent_idx):
+        if not 0 <= agent_idx < self.n_agents:
+            raise ValueError(
+                f"agent_idx must be between 0 and {self.n_agents - 1}"
+            )
 
-        # Calculate squared distance from every cell
-        # to every agent
+    def assign_regions(self, agent_positions):
+        agent_positions = self._validate_agent_positions(agent_positions)
+
         distances = np.sum(
             (
-                grid_points[:, :, None, :]
+                self.grid_points[:, :, None, :]
                 - agent_positions[None, None, :, :]
             ) ** 2,
             axis=-1
         )
 
-        # Assign every cell to its nearest agent
-        nearest_agents = np.argmin(
-            distances,
-            axis=-1
-        )
+        nearest_agents = np.argmin(distances, axis=-1)
 
-        # Create one region for each agent
-        self.regions = []
-
-        for agent_idx in range(self.n_agents):
-            cell_indices = np.argwhere(
-                nearest_agents == agent_idx
-            )
-
-            region = {
+        self.regions = [
+            {
                 (int(row), int(col))
-                for row, col in cell_indices
+                for row, col in np.argwhere(nearest_agents == agent_idx)
             }
-
-            self.regions.append(region)
+            for agent_idx in range(self.n_agents)
+        ]
 
         return self.regions
 
     def get_region_mask(self, agent_idx):
-        if not 0 <= agent_idx < self.n_agents:
-            raise ValueError(
-                f"agent_idx must be between 0 and {self.n_agents - 1}"
-            )
+        self._validate_agent_index(agent_idx)
 
         mask = np.zeros(
             (self.grid_size, self.grid_size),
@@ -77,10 +71,7 @@ class VoronoiPlanner:
         return mask
 
     def get_unvisited_cells(self, agent_idx, coverage_map):
-        if not 0 <= agent_idx < self.n_agents:
-            raise ValueError(
-                f"agent_idx must be between 0 and {self.n_agents - 1}"
-            )
+        self._validate_agent_index(agent_idx)
 
         coverage_map = np.asarray(coverage_map)
 
@@ -93,13 +84,11 @@ class VoronoiPlanner:
                 f"({self.grid_size}, {self.grid_size})"
             )
 
-        unvisited_cells = []
-
-        for row, col in self.regions[agent_idx]:
-            if not coverage_map[row, col]:
-                unvisited_cells.append((row, col))
-
-        return unvisited_cells
+        return [
+            (row, col)
+            for row, col in self.regions[agent_idx]
+            if not coverage_map[row, col]
+        ]
 
     def reassign(
         self,
@@ -108,19 +97,9 @@ class VoronoiPlanner:
         agent_positions,
         coverage_map
     ):
-        if not 0 <= depleted_idx < self.n_agents:
-            raise ValueError(
-                f"depleted_idx must be between "
-                f"0 and {self.n_agents - 1}"
-            )
+        self._validate_agent_index(depleted_idx)
 
-        agent_positions = np.asarray(agent_positions)
-
-        if agent_positions.shape != (self.n_agents, 2):
-            raise ValueError(
-                f"agent_positions must have shape "
-                f"({self.n_agents}, 2)"
-            )
+        agent_positions = self._validate_agent_positions(agent_positions)
 
         coverage_map = np.asarray(coverage_map)
 
@@ -136,70 +115,58 @@ class VoronoiPlanner:
         active_indices = list(active_indices)
 
         if not active_indices:
-            raise ValueError(
-                "active_indices cannot be empty"
-            )
-
-        for agent_idx in active_indices:
-            if not 0 <= agent_idx < self.n_agents:
-                raise ValueError(
-                    f"Invalid agent index: {agent_idx}"
-                )
+            raise ValueError("active_indices cannot be empty")
 
         if depleted_idx in active_indices:
             raise ValueError(
                 "depleted_idx cannot be in active_indices"
             )
 
-        # Start with empty regions
-        new_regions = [
-            set() for _ in range(self.n_agents)
-        ]
+        for agent_idx in active_indices:
+            self._validate_agent_index(agent_idx)
 
-        # Keep the depleted agent's region empty.
-        # Redistribute every grid cell among active agents.
-        rows, cols = np.indices(
-            (self.grid_size, self.grid_size)
+        unvisited_cells = self.get_unvisited_cells(
+            depleted_idx,
+            coverage_map
         )
 
-        grid_points = np.stack(
-            (rows, cols),
-            axis=-1
-        )
+        if not unvisited_cells:
+            self.regions[depleted_idx].clear()
+            return self.regions
 
         active_positions = agent_positions[active_indices]
 
+        cells = np.asarray(
+            unvisited_cells,
+            dtype=np.float32
+        )
+
         distances = np.sum(
             (
-                grid_points[:, :, None, :]
-                - active_positions[None, None, :, :]
+                cells[:, None, :]
+                - active_positions[None, :, :]
             ) ** 2,
             axis=-1
         )
 
-        nearest_active = np.argmin(
-            distances,
-            axis=-1
-        )
+        nearest_active = np.argmin(distances, axis=1)
 
-        for active_position_idx, agent_idx in enumerate(
-            active_indices
-        ):
-            cell_indices = np.argwhere(
-                nearest_active == active_position_idx
-            )
+        for cell_idx, active_position_idx in enumerate(nearest_active):
+            row, col = unvisited_cells[cell_idx]
+            active_agent = active_indices[active_position_idx]
 
-            new_regions[agent_idx] = {
-                (int(row), int(col))
-                for row, col in cell_indices
-            }
-
-        self.regions = new_regions
+            self.regions[depleted_idx].discard((row, col))
+            self.regions[active_agent].add((row, col))
 
         return self.regions
 
     def get_region_sizes(self):
-        return [
-            len(region)
-            for region in self.regions
-        ]
+        return [len(region) for region in self.regions]
+
+    def __repr__(self):
+        return (
+            f"VoronoiPlanner("
+            f"grid={self.grid_size}x{self.grid_size}, "
+            f"agents={self.n_agents}, "
+            f"region_sizes={self.get_region_sizes()})"
+        )
