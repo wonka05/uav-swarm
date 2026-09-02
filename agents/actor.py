@@ -75,6 +75,7 @@ class Actor(nn.Module):
         obs_tensor = obs_tensor.unsqueeze(0)  # (1, obs_dim)
 
         action = self.forward(obs_tensor)  # (1, action_dim)
+        self.train()
         return action.squeeze(0).cpu().numpy()
 
 
