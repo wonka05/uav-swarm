@@ -191,26 +191,25 @@ python main.py --mode render --checkpoint checkpoints/maddpg_best.pt
 - [x] `env/grid.py` — forest grid and coverage map
 - [x] `env/uav.py` — UAV physics and sensing
 - [x] `env/forest_env.py` — complete Gym environment
-- [ ] `agents/replay_buffer.py` — experience memory
-- [ ] `agents/actor.py` — Actor neural network
-- [ ] `agents/critic.py` — Critic neural network
-- [ ] `agents/noise.py` — OU exploration noise
-- [ ] `agents/maddpg.py` — full MADDPG algorithm
-- [ ] `planning/voronoi_planner.py` — region assignment
+- [x] `agents/replay_buffer.py` — experience memory
+- [x] `agents/actor.py` — Actor neural network
+- [x] `agents/critic.py` — Critic neural network
+- [x] `agents/noise.py` — OU exploration noise
+- [x] `agents/maddpg.py` — full MADDPG algorithm
+- [x] `planning/voronoi_planner.py` — region assignment
 - [x] `tests/test_env.py` — 63 unit tests
 
 ### Stage 2 — *(Planned)*
 
-- [ ] `training/train.py` — 1500-episode training loop
-- [ ] Full training run with TensorBoard logging
-- [ ] Baseline comparison (Random Walk, Greedy, Standard MADDPG)
-- [ ] Ablation study (no planning layer, no cooperative reward)
+- [] `training/train.py` — 1500-episode training loop
+- [] Full training run with TensorBoard logging
+- [] Baseline comparison (Random Walk, Greedy, Standard MADDPG)
+- [] Ablation study (no planning layer, no cooperative reward)
 
 ### Stage 3 — *(Planned)*
 
-- [ ] `evaluation/` — metrics and comparison table
-- [ ] `visualization/pygame_render.py` — real-time dashboard
-- [ ] `visualization/plot_metrics.py` — training charts
-- [ ] Final report and demo
+- [] `evaluation/` — metrics and comparison table
+- [] `visualization/pygame_render.py` — real-time dashboard
+- [] `visualization/plot_metrics.py` — training charts
 
 ---
