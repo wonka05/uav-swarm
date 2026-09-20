@@ -24,6 +24,8 @@ class MADDPG:
         self.tau          = m["tau"]
         self.batch_size   = m["batch_size"]
         self.update_freq  = m["update_frequency"]
+        self.sat_penalty   = m.get("saturation_penalty", 0.01)
+        self.sat_threshold = m.get("saturation_threshold", 3.0)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"MADDPG running on: {self.device}")
@@ -99,7 +101,7 @@ class MADDPG:
     # LEARNING UPDATE 
 
     def update(self) -> tuple[float | None, float | None]:
-        if not self.buffer.is_ready(self.batch_size):
+        if len(self.buffer) < 5000:
             return None, None
         if self.total_steps % self.update_freq != 0:
             return None, None
@@ -146,8 +148,13 @@ class MADDPG:
             critic_loss_total += loss_c.item()
 
         # UPDATE SHARED ACTOR 
+        for critic in self.critics:
+            for p in critic.parameters():
+                p.requires_grad = False
+
         self.actor.train()
-        curr_acts = [self.actor(obs_t[:, i, :]) for i in range(N)]
+        pre_acts  = [self.actor.forward_pre_tanh(obs_t[:, i, :]) for i in range(N)]
+        curr_acts = [torch.tanh(p) for p in pre_acts]
         joint_curr_acts = torch.cat(curr_acts, dim=-1)
 
         actor_loss = -sum(
@@ -155,10 +162,21 @@ class MADDPG:
             for i in range(N)
         ) / N
 
+        # Saturation barrier: zero cost inside the responsive tanh band,
+        # quadratic beyond it. Gradient stays large exactly where tanh's vanishes.
+        sat = sum(
+            torch.relu(p.abs() - self.sat_threshold).pow(2).mean() for p in pre_acts
+        ) / N
+        actor_loss = actor_loss + self.sat_penalty * sat
+
         self.actor_opt.zero_grad()
         actor_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
         self.actor_opt.step()
+
+        for critic in self.critics:
+            for p in critic.parameters():
+                p.requires_grad = True
 
         # SOFT UPDATE TARGET NETWORKS 
         self._soft_update(self.actor, self.actor_target)
@@ -189,7 +207,7 @@ class MADDPG:
             "actor_losses":   self.actor_losses,
             "critic_losses":  self.critic_losses,
         }, path)
-        print(f"Checkpoint saved → {path}")
+        print(f"Checkpoint saved -> {path}")
 
     def load(self, path: str):
         ckpt = torch.load(path, map_location=self.device)
@@ -201,14 +219,14 @@ class MADDPG:
         self.total_steps  = ckpt.get("total_steps", 0)
         self.actor_losses  = ckpt.get("actor_losses", [])
         self.critic_losses = ckpt.get("critic_losses", [])
-        print(f"Checkpoint loaded ← {path}")
+        print(f"Checkpoint loaded <- {path}")
 
     # EPISODE HOOKS 
 
     def episode_reset(self):
         self.noise.reset_all()
 
-    def episode_end(self):
+    def episode_end(self): 
         self.noise.step_sigma()
 
     def __repr__(self) -> str:

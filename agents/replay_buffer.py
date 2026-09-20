@@ -63,7 +63,7 @@ if __name__ == "__main__":
     buf = ReplayBuffer(capacity=1000, n_agents=5, obs_dim=172, action_dim=2)
 
     for _ in range(300):
-        obs      = [np.random.randn(172).astype(np.float32) for _ in range(5)]
+        obs      = [np.random.randn(293).astype(np.float32) for _ in range(5)]
         actions  = [np.random.randn(2).astype(np.float32)   for _ in range(5)]
         rewards  = np.random.randn(5).astype(np.float32)
         buf.push(obs, actions, rewards, obs, False)
@@ -72,10 +72,10 @@ if __name__ == "__main__":
     assert buf.is_ready(256)
 
     o, a, r, no, d = buf.sample(256)
-    assert o.shape  == (256, 5, 172)
+    assert o.shape  == (256, 5, 293)
     assert a.shape  == (256, 5, 2)
     assert r.shape  == (256, 5)
-    assert no.shape == (256, 5, 172)
+    assert no.shape == (256, 5, 293)
     assert d.shape  == (256,)
 
     print(f"Buffer size:    {len(buf)}")

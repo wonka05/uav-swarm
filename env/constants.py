@@ -19,9 +19,10 @@ OBSTACLE = 1
 TARGET   = 2
 BASE     = 3
 
-# Observation vector breakdown — total = 172
-PATCH_DIM    = (2 * OBS_RADIUS + 1) ** 2   # 121
+# Observation vector breakdown, total = 293
+PATCH_DIM    = (2 * OBS_RADIUS + 1) ** 2   # 121 terrain cells
+COVERAGE_DIM = PATCH_DIM                   # 121 visited-cell flags
 OWN_DIM      = 5                           # x, y, vx, vy, battery
 NEIGHBOR_DIM = (N_AGENTS - 1) * 4          # 16
 TARGET_DIM   = N_TARGETS * 3               # 30
-OBS_DIM      = PATCH_DIM + OWN_DIM + NEIGHBOR_DIM + TARGET_DIM  # 172
+OBS_DIM      = PATCH_DIM + COVERAGE_DIM + OWN_DIM + NEIGHBOR_DIM + TARGET_DIM

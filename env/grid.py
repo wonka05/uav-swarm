@@ -83,7 +83,31 @@ def mark_visited(coverage_map, x, y):
     return is_new
 
 
-# GRID UTILITIES 
+# SENSOR FOOTPRINT
+
+def make_footprint_mask(radius, shape="circle"):
+    """Boolean (2r+1, 2r+1) sensor footprint, built once at env init."""
+    d = np.arange(-radius, radius + 1)
+    dx, dy = np.meshgrid(d, d, indexing="ij")
+    if shape == "circle":
+        return (dx ** 2 + dy ** 2) <= radius ** 2
+    return np.ones((2 * radius + 1, 2 * radius + 1), dtype=bool)
+
+
+def footprint_cells(size, cx, cy, mask, radius):
+    """(size, size) bool array, True on cells inside the footprint centred at
+    (cx, cy). Read-only — writes nothing."""
+    out = np.zeros((size, size), dtype=bool)
+    x0, x1 = max(0, cx - radius), min(size, cx + radius + 1)
+    y0, y1 = max(0, cy - radius), min(size, cy + radius + 1)
+    out[x0:x1, y0:y1] = mask[
+        x0 - (cx - radius) : mask.shape[0] - ((cx + radius + 1) - x1),
+        y0 - (cy - radius) : mask.shape[1] - ((cy + radius + 1) - y1),
+    ]
+    return out
+
+
+# GRID UTILITIES
 
 def get_coverage_rate(coverage_map, grid):
     

@@ -46,6 +46,13 @@ class UAV:
         # Scale action to actual grid speed (max 1.0 cell per step)
         velocity = np.clip(action, -1.0, 1.0).astype(np.float32)
 
+        # Constrain to the unit DISC, not the unit box: a drone has one top
+        # speed, not a per-axis top speed. Without this, [1,1] travels 1.414
+        # cells/step and diagonal headings gain an unearned advantage.
+        speed = float(np.linalg.norm(velocity))
+        if speed > 1.0:
+            velocity = (velocity / speed).astype(np.float32)
+
         # Proposed new position
         new_pos = self.pos + velocity
 

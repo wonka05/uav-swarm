@@ -1,13 +1,16 @@
 import gymnasium as gym
 import numpy as np
 import yaml
+from env import uav
 from env.grid import (
     create_empty_grid, place_obstacles, place_targets,
     place_base, create_coverage_map, reset_coverage_map,
     mark_visited, get_coverage_rate, is_valid_position,
+    make_footprint_mask, footprint_cells,
     print_grid, FREE, OBSTACLE, TARGET, BASE
 )
 from env.uav import UAV
+from planning.voronoi_planner import VoronoiPlanner
 
 
 class ForestEnv(gym.Env):
@@ -31,6 +34,15 @@ class ForestEnv(gym.Env):
         self.max_steps   = env_cfg["max_steps"]
         self.dyn_ratio   = env_cfg["dynamic_target_ratio"]
 
+        # Sensor footprint used for coverage credit. The UAV surveys every
+        # navigable cell inside this footprint, not just the cell it occupies.
+        self.sensor_shape       = env_cfg.get("sensor_shape", "circle")
+        self.footprint_mask     = make_footprint_mask(self.obs_radius, self.sensor_shape)
+        # Cells newly sensed by one axis-aligned sweeping step — the unit of
+        # "one step's worth of productive surveying" used to scale the reward.
+        self.coverage_ref       = int(self.footprint_mask.sum(axis=0).max())
+        self.coverage_threshold = env_cfg.get("coverage_threshold", 0.95)
+
         rew_cfg = self.cfg["rewards"]
         self.r_coverage  = rew_cfg["coverage"]
         self.r_detection = rew_cfg["detection"]
@@ -44,7 +56,24 @@ class ForestEnv(gym.Env):
         own_dim       = 5                                  # x, y, vx, vy, battery
         neighbor_dim  = (self.n_agents - 1) * 4           # rel_x, rel_y, battery, speed
         target_dim    = self.n_targets * 3                 # rel_x, rel_y, visible_flag
-        self.obs_dim  = patch_dim + own_dim + neighbor_dim + target_dim
+
+        # Fixed Voronoi seed points used to define each UAV's coverage region.
+        # UAVs still physically start at the base station (1, 1).
+        if self.n_agents == 5:
+            self.region_seeds = np.array([
+                [5.0, 5.0],
+                [5.0, 44.0],
+                [44.0, 5.0],
+                [44.0, 44.0],
+                [25.0, 25.0],
+            ], dtype=np.float32)
+        else:
+            raise ValueError("This configuration expects exactly 5 UAV agents.")
+
+        self.region_centers = self.region_seeds.copy()
+
+        # 172 existing features + 5 UAV-ID features + 2 region-center features
+        self.obs_dim  = patch_dim + own_dim + neighbor_dim + target_dim + self.n_agents + 2
 
         self.action_space = gym.spaces.Box(
             low=-1.0, high=1.0,
@@ -109,6 +138,22 @@ class ForestEnv(gym.Env):
             )
             self.uavs.append(uav)
 
+        # Build the Voronoi partition from fixed seed points and use each
+        # region's centroid as the goal supplied to the shared Actor.
+        planner = VoronoiPlanner(
+            grid_size=self.grid_size,
+            n_agents=self.n_agents,
+        )
+        planner.assign_regions(self.region_seeds)
+
+        self.region_centers = np.zeros((self.n_agents, 2), dtype=np.float32)
+        for i in range(self.n_agents):
+            cells = np.argwhere(planner.masks[i] > 0.5)
+            if len(cells) > 0:
+                self.region_centers[i] = cells.mean(axis=0).astype(np.float32)
+            else:
+                self.region_centers[i] = self.region_seeds[i]
+
         return self._get_all_obs()
 
     # STEP 
@@ -117,24 +162,17 @@ class ForestEnv(gym.Env):
         self.step_count += 1
         rewards = np.zeros(self.n_agents, dtype=np.float32)
 
-        # Move each agent 
+        # PASS 1 — movement, collision, battery, boundary
+        moved_flags = np.zeros(self.n_agents, dtype=bool)
         for i, uav in enumerate(self.uavs):
             if not uav.is_active:
                 continue
 
-            moved = uav.move(actions[i], self.grid)
+            moved_flags[i] = uav.move(actions[i], self.grid)
 
-            if not moved:
+            if not moved_flags[i]:
                 # Collision penalty
                 rewards[i] += self.r_collision
-            else:
-                # Coverage reward or redundancy penalty
-                gx, gy = uav.grid_pos
-                is_new = mark_visited(self.coverage_map, gx, gy)
-                if is_new:
-                    rewards[i] += self.r_coverage
-                else:
-                    rewards[i] += self.r_redundant
 
             # Battery penalty every step
             rewards[i] += self.r_battery
@@ -147,7 +185,38 @@ class ForestEnv(gym.Env):
             if edge_dist < 2:
                 rewards[i] -= (2 - edge_dist) * 0.5
 
-        # Target detection 
+        # PASS 2 — simultaneous footprint coverage, order-independent.
+        # Every agent computes its newly sensed cells against the same
+        # start-of-step coverage map; cells claimed by k agents pay 1/k each.
+        navigable = (self.grid == FREE) | (self.grid == TARGET)
+        claims = np.zeros(
+            (self.n_agents, self.grid_size, self.grid_size), dtype=bool
+        )
+        for i, uav in enumerate(self.uavs):
+            if not uav.is_active or not moved_flags[i]:
+                continue
+            gx, gy = uav.grid_pos
+            claims[i] = (
+                footprint_cells(self.grid_size, gx, gy,
+                                self.footprint_mask, self.obs_radius)
+                & navigable & ~self.coverage_map
+            )
+
+        n_claimants = claims.sum(axis=0)
+        share = np.where(n_claimants > 0, 1.0 / np.maximum(n_claimants, 1), 0.0)
+
+        for i in range(self.n_agents):
+            if not moved_flags[i]:
+                continue
+            credit = float((claims[i] * share).sum())
+            if credit > 0.0:
+                rewards[i] += self.r_coverage * credit / self.coverage_ref
+            else:
+                rewards[i] += self.r_redundant
+
+        self.coverage_map |= claims.any(axis=0)
+
+        # Target detection
         for i, uav in enumerate(self.uavs):
             if not uav.is_active:
                 continue
@@ -168,7 +237,7 @@ class ForestEnv(gym.Env):
         all_dead = all(not uav.is_active for uav in self.uavs)
         done = (
             self.step_count >= self.max_steps or
-            coverage >= 0.95 or
+            coverage >= self.coverage_threshold or
             all_dead
         )
 
@@ -218,16 +287,21 @@ class ForestEnv(gym.Env):
         # 4. Target information
         target_info = []
         for i, tpos in enumerate(self.target_pos):
-            rel  = (tpos - uav.pos) / self.obs_radius
+            rel = (tpos - uav.pos) / self.grid_size
+            rel = np.clip(rel, -1.0, 1.0)
             dist = np.linalg.norm(tpos - uav.pos)
             visible = 1.0 if dist <= self.obs_radius else 0.0
             target_info.extend([rel[0], rel[1], visible])
-
+        agent_id = np.zeros(self.n_agents, dtype=np.float32)
+        agent_id[uav.agent_id] = 1.0
+        region_center = self.region_centers[uav.agent_id] / self.grid_size
         obs = np.concatenate([
             patch,
             own,
             np.array(neighbour_info, dtype=np.float32),
-            np.array(target_info,    dtype=np.float32)
+            np.array(target_info,    dtype=np.float32),
+            agent_id,
+            region_center
         ])
         return obs.astype(np.float32)
 

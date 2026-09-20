@@ -10,7 +10,7 @@ class Actor(nn.Module):
     Maps a single drone's observation to a continuous action.
 
     Architecture (per spec):
-        Linear(172, 128) -> ReLU
+        Linear(obs_dim, 128) -> ReLU
         Linear(128, 128) -> ReLU
         Linear(128, 128) -> ReLU
         Linear(128, 2)   -> Tanh
@@ -51,6 +51,10 @@ class Actor(nn.Module):
             )
         return self.net(obs)
 
+    def forward_pre_tanh(self, obs: torch.Tensor) -> torch.Tensor:
+        """Logits before the output Tanh — used for the saturation penalty."""
+        return self.net[:-1](obs)
+
     @torch.no_grad()
     def get_action(self, obs_array: np.ndarray, device: torch.device) -> np.ndarray:
         """
@@ -85,13 +89,13 @@ if __name__ == "__main__":
     n_params = sum(p.numel() for p in actor.parameters() if p.requires_grad)
     print(f"Actor trainable parameters: {n_params:,}")
 
-    batch_obs = torch.randn(4, 172)
+    batch_obs = torch.randn(4, actor.obs_dim)
     out = actor(batch_obs)
     print("Batch forward output shape:", tuple(out.shape))
     assert out.shape == (4, 2)
     assert torch.all(out >= -1.0) and torch.all(out <= 1.0)
 
-    single_obs = np.random.randn(172).astype(np.float32)
+    single_obs = np.random.randn(actor.obs_dim).astype(np.float32)
     action = actor.get_action(single_obs, torch.device("cpu"))
     print("get_action output shape:", action.shape, "| sample:", action)
     assert action.shape == (2,)

@@ -9,13 +9,13 @@ class Critic(nn.Module):
     Maps joint observations + joint actions of all agents to a single
     Q-value.
 
-    Input dim = n_agents * (obs_dim + action_dim) = 5 * (172 + 2) = 870
-        - joint_obs:     (batch, n_agents * obs_dim)    = (batch, 860)
+    Input dim = n_agents * (obs_dim + action_dim) = 5 * (293 + 2) = 1475
+        - joint_obs:     (batch, n_agents * obs_dim)    = (batch, 1465)
         - joint_actions: (batch, n_agents * action_dim) = (batch, 10)
-        - concatenated:  (batch, 870)
+        - concatenated:  (batch, 1475)
 
     Architecture (per spec):
-        Linear(870, 256) -> ReLU
+        Linear(1475, 256) -> ReLU
         Linear(256, 256) -> ReLU
         Linear(256, 256) -> ReLU
         Linear(256, 1)   (no output activation — raw Q-value)
@@ -38,7 +38,7 @@ class Critic(nn.Module):
 
         self.joint_obs_dim = n_agents * obs_dim
         self.joint_action_dim = n_agents * action_dim
-        self.input_dim = self.joint_obs_dim + self.joint_action_dim  # 870
+        self.input_dim = self.joint_obs_dim + self.joint_action_dim
 
         self.net = nn.Sequential(
             nn.Linear(self.input_dim, hidden_dim),
@@ -53,7 +53,7 @@ class Critic(nn.Module):
     def forward(self, joint_obs: torch.Tensor, joint_actions: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            joint_obs:     torch.Tensor, shape (batch, n_agents * obs_dim)     = (batch, 860)
+            joint_obs:     torch.Tensor, shape (batch, n_agents * obs_dim)     = (batch, 1465)
             joint_actions: torch.Tensor, shape (batch, n_agents * action_dim)  = (batch, 10)
 
         Returns:
@@ -70,7 +70,7 @@ class Critic(nn.Module):
                 f"(n_agents * action_dim); got {joint_actions.shape[-1]}"
             )
 
-        x = torch.cat([joint_obs, joint_actions], dim=-1)  # (batch, 870)
+        x = torch.cat([joint_obs, joint_actions], dim=-1)
         return self.net(x)
 
 
@@ -82,7 +82,7 @@ if __name__ == "__main__":
     print(f"Expected input dim: {critic.input_dim}")
 
     batch = 4
-    joint_obs = torch.randn(batch, 860)
+    joint_obs = torch.randn(batch, critic.joint_obs_dim)
     joint_actions = torch.randn(batch, 10)
 
     q = critic(joint_obs, joint_actions)

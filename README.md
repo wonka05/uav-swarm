@@ -74,28 +74,29 @@ Each drone is an RL agent operating in a shared environment. The agent observes 
 |---|---|
 | Agent | A single UAV drone |
 | Environment | 50×50 forest grid simulation |
-| State | Local grid patch, battery, neighbours, visible targets (172 dims) |
+| State | Local grid patch, local coverage patch, battery, neighbours, visible targets (293 dims) |
 | Action | Continuous velocity [vx, vy] in [-1, 1] |
-| Reward | +2.0 new cell, +5.0 target detected, -3.0 collision, -0.5 redundant |
+| Reward | +1.0 new cell, +3.0 target detected, -1.0 collision, -0.05 redundant |
 | Goal | Maximize total coverage and target detection across the episode |
 
 ### MADDPG — Centralized Training, Decentralized Execution
 
 | | Training | Deployment |
 |---|---|---|
-| Actor input | Local observation (172 numbers) | Local observation (same) |
-| Critic input | ALL 5 observations + ALL 5 actions (870 numbers) | Not used |
+| Actor input | Local observation (293 numbers) | Local observation (same) |
+| Critic input | ALL 5 observations + ALL 5 actions (1475 numbers) | Not used |
 | Communication | Required | Not required |
 
-### Observation Vector (172 dimensions)
+### Observation Vector (293 dimensions)
 
 | Component | Calculation | Dimensions |
 |---|---|---|
 | Local grid patch | (2×5+1)² = 11² flattened | 121 |
+| Local coverage patch | visited flags for same 11x11 window | 121 |
 | Own state | x, y, vx, vy, battery | 5 |
 | Neighbour info | 4 neighbours × 4 values | 16 |
 | Target info | 10 targets × 3 values | 30 |
-| **Total** | | **172** |
+| **Total** | | **293** |
 
 ---
 
@@ -147,7 +148,7 @@ pip install -r requirements.txt
 
 ```bash
 python -c "from env.constants import OBS_DIM; print('OBS_DIM:', OBS_DIM)"
-# Expected output: OBS_DIM: 172
+# Expected output: OBS_DIM: 293
 ```
 
 ### Run Training 
