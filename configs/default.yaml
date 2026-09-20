@@ -40,8 +40,8 @@ training:
   log_frequency: 50
   eval_frequency: 10
   eval_episodes: 10
-  checkpoint_dir: checkpoints/
-  log_dir: logs/
+  checkpoint_dir: checkpoints/final1500/
+  log_dir: logs/final1500/
 
 evaluation:
   n_test_episodes: 100
