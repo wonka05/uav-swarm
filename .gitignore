@@ -10,3 +10,5 @@ __pycache__/
 # Generated visualization outputs
 visualization/*.npz
 visualization/*.avi
+
+visualization/results/
