@@ -7,3 +7,6 @@ runs/
 __pycache__/
 *.pyc
 .env
+# Generated visualization outputs
+visualization/*.npz
+visualization/*.avi
