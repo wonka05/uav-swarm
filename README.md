@@ -204,8 +204,7 @@ step counter and loss histories. Optimiser state is not saved. Load one with `MA
 │   ├── test_env.py             # 63 checks on the grid, UAV and environment
 │   └── test_voronoi_planner.py # Voronoi planner demonstration script
 ├── test_voronoi.py             # same planner script, runnable from the root
-├── test_maddpg.py              # MADDPG smoke test on random data
-└── check_obs.py                # confirms the five UAVs receive different observations
+└── test_maddpg.py              # MADDPG smoke test on random data
 ```
 
 `checkpoints/` and `logs/` are created when you train and are excluded from git.
@@ -446,7 +445,6 @@ absolute rather than relative to a reference.
 | `python -m tests.test_voronoi_planner` | Prints the region sizes, the overlap between regions and a reassignment example for the planner |
 | `python test_voronoi.py` | The same planner script, runnable directly from the root |
 | `python test_maddpg.py` | Smoke test: fills the buffer with random data, runs one update, decays the noise, saves and reloads a checkpoint |
-| `python check_obs.py` | Moves the five UAVs apart for 10 steps and prints the distance between every pair of observations |
 
 Notes:
 

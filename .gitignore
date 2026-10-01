@@ -23,3 +23,6 @@ analysis/
 # Presentation and report exports
 *.pptx
 *.pdf
+
+# Local notes, not part of the project
+CLAUDE.md
