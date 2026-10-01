@@ -42,11 +42,6 @@ class ForestEnv(gym.Env):
         # "one step's worth of productive surveying" used to scale the reward.
         self.coverage_ref       = int(self.footprint_mask.sum(axis=0).max())
         self.coverage_threshold = env_cfg.get("coverage_threshold", 0.95)
-        # Frontier-target observation (Fix 1). When on, 4 features follow the
-        # 179 base features: direction to the UAV's held frontier cell (row,
-        # col), its distance / grid_size, and the uncovered fraction of the
-        # UAV's current Voronoi region. Off keeps the 179-dim observation.
-        self.frontier_obs       = bool(env_cfg.get("frontier_obs", False))
 
         rew_cfg = self.cfg["rewards"]
         self.r_coverage  = rew_cfg["coverage"]
@@ -79,8 +74,6 @@ class ForestEnv(gym.Env):
 
         # 172 existing features + 5 UAV-ID features + 2 region-center features
         self.obs_dim  = patch_dim + own_dim + neighbor_dim + target_dim + self.n_agents + 2
-        if self.frontier_obs:
-            self.obs_dim += 4                              # frontier-target features
 
         self.action_space = gym.spaces.Box(
             low=-1.0, high=1.0,
@@ -99,13 +92,6 @@ class ForestEnv(gym.Env):
         self.dynamic_idxs = set()
         self.detected     = set()
         self.step_count   = 0
-
-        # Frontier-target state (used only when frontier_obs is on)
-        self.frontier_planner = (VoronoiPlanner(grid_size=self.grid_size, n_agents=self.n_agents)
-                                 if self.frontier_obs else None)
-        self.free_mask        = None
-        self.frontier_targets = [None] * self.n_agents
-        self.frontier_feats   = np.zeros((self.n_agents, 4), dtype=np.float32)
 
     # RESET 
 
@@ -167,11 +153,6 @@ class ForestEnv(gym.Env):
                 self.region_centers[i] = cells.mean(axis=0).astype(np.float32)
             else:
                 self.region_centers[i] = self.region_seeds[i]
-
-        if self.frontier_obs:
-            self.free_mask        = (self.grid == FREE) | (self.grid == TARGET)
-            self.frontier_targets = [None] * self.n_agents
-            self._update_frontier()
 
         return self._get_all_obs()
 
@@ -269,10 +250,6 @@ class ForestEnv(gym.Env):
             "step":              self.step_count,
         }
 
-        # Frontier targets follow this step's coverage and active set
-        if self.frontier_obs:
-            self._update_frontier()
-
         return self._get_all_obs(), rewards, done, info
 
     # OBSERVATIONS
@@ -326,71 +303,11 @@ class ForestEnv(gym.Env):
             agent_id,
             region_center
         ])
-        if self.frontier_obs:
-            obs = np.concatenate([obs, self.frontier_feats[uav.agent_id]])
         return obs.astype(np.float32)
 
     def _get_all_obs(self):
         """Return observation list for all agents."""
         return [self._get_obs(uav) for uav in self.uavs]
-
-    # FRONTIER TARGETS
-
-    def _update_frontier(self):
-        """Refresh every UAV's held frontier target and its 4 features.
-
-        Free cells are split among the ACTIVE UAVs by nearest current
-        position (dynamic Voronoi). A UAV keeps its target until that cell is
-        covered, then takes the nearest uncovered free cell in its own
-        region, or the nearest one anywhere when its region has none.
-        Obstacle and base cells are never candidates. Inactive UAVs, and all
-        UAVs once nothing is uncovered, get four zeros. Draws no random
-        numbers, so the map / target-motion RNG stream is unchanged.
-        """
-        self.frontier_feats = np.zeros((self.n_agents, 4), dtype=np.float32)
-        active    = np.array([u.is_active for u in self.uavs], dtype=bool)
-        positions = np.array([u.pos for u in self.uavs], dtype=np.float32)
-        owner     = self.frontier_planner.owner_map(positions, active)
-        uncovered = self.free_mask & ~self.coverage_map
-        any_uncovered = bool(uncovered.any())
-
-        for i, uav in enumerate(self.uavs):
-            if not uav.is_active:
-                self.frontier_targets[i] = None
-                continue
-
-            own_free      = (owner == i) & self.free_mask
-            own_uncovered = own_free & uncovered
-
-            target = self.frontier_targets[i]
-            if target is None or not uncovered[target]:
-                if own_uncovered.any():
-                    target = self._nearest_cell(own_uncovered, uav.pos)
-                elif any_uncovered:
-                    target = self._nearest_cell(uncovered, uav.pos)   # fallback: anywhere
-                else:
-                    target = None
-            self.frontier_targets[i] = target
-            if target is None:
-                continue
-
-            delta = np.array([target[0] + 0.5, target[1] + 0.5], dtype=np.float32) - uav.pos
-            dist  = float(np.linalg.norm(delta))
-            direction = delta / dist if dist > 1e-6 else np.zeros(2, dtype=np.float32)
-            self.frontier_feats[i] = [
-                direction[0],
-                direction[1],
-                dist / self.grid_size,
-                own_uncovered.sum() / max(int(own_free.sum()), 1),
-            ]
-
-    @staticmethod
-    def _nearest_cell(mask, pos):
-        """(row, col) of the True cell in mask whose centre is nearest pos."""
-        cells   = np.argwhere(mask)
-        dist_sq = ((cells + 0.5 - pos) ** 2).sum(axis=1)
-        row, col = cells[np.argmin(dist_sq)]
-        return int(row), int(col)
 
     # COOPERATIVE REWARD
 

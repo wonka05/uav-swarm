@@ -9,7 +9,6 @@ environment:
   dynamic_target_ratio: 0.33
   sensor_shape: circle          # "circle" (81 cells) | "square" (121) — ablation switch
   coverage_threshold: 0.95
-  frontier_obs: false           # true = 183D: +4 frontier-target features after the 179 base features
 
 rewards:
   coverage: 0.5

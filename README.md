@@ -360,7 +360,6 @@ Everything configurable lives in [configs/default.yaml](configs/default.yaml).
 | | `dynamic_target_ratio` | 0.33 | Share of targets that move (3 of 10) |
 | | `sensor_shape` | `circle` | `circle` (81 cells) or `square` (121 cells) |
 | | `coverage_threshold` | 0.95 | Coverage that ends an episode early |
-| | `frontier_obs` | `false` | Experimental: adds 4 frontier-target features (183 values). All reported results use `false`. |
 | `rewards` | `coverage`, `detection`, `collision`, `redundancy`, `battery_per_step`, `cooperative_alpha` | 0.5, 1.0, −1.0, −0.1, −0.01, 0.3 | See [Rewards](#rewards) |
 | `maddpg` | `gamma`, `tau` | 0.99, 0.01 | Discount factor; target-network update rate |
 | | `lr_actor`, `lr_critic` | 0.00005, 0.0001 | Adam learning rates |

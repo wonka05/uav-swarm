@@ -222,8 +222,8 @@ class MADDPG:
         print(f"Checkpoint loaded <- {path}")
 
     def load_expanded(self, path: str):
-        """Warm-start the networks from a checkpoint whose observation is
-        shorter than self.obs_dim (e.g. 179 -> 183). The extra inputs sit at
+        """Warm-start the networks from a checkpoint whose observation is the
+        same size as, or shorter than, self.obs_dim. Any extra inputs sit at
         the END of every agent's observation, so their first-layer weights
         start at zero and the networks compute what the old ones did (up to
         float rounding). Weights only: total_steps and the loss histories are
