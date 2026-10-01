@@ -221,6 +221,47 @@ class MADDPG:
         self.critic_losses = ckpt.get("critic_losses", [])
         print(f"Checkpoint loaded <- {path}")
 
+    def load_expanded(self, path: str):
+        """Warm-start the networks from a checkpoint whose observation is
+        shorter than self.obs_dim (e.g. 179 -> 183). The extra inputs sit at
+        the END of every agent's observation, so their first-layer weights
+        start at zero and the networks compute what the old ones did (up to
+        float rounding). Weights only: total_steps and the loss histories are
+        NOT restored, so this starts a fresh run."""
+        ckpt = torch.load(path, map_location=self.device)
+        old_dim = ckpt["actor"]["net.0.weight"].shape[1]
+        new_dim = self.obs_dim
+        if old_dim > new_dim:
+            raise ValueError(f"checkpoint obs_dim {old_dim} > model obs_dim {new_dim}")
+        extra = new_dim - old_dim
+        N = self.n_agents
+
+        def expand_actor(sd):
+            sd = dict(sd)
+            w = sd["net.0.weight"]                              # (hidden, old_dim)
+            sd["net.0.weight"] = torch.cat([w, w.new_zeros(w.shape[0], extra)], dim=1)
+            return sd
+
+        def expand_critic(sd):
+            sd = dict(sd)
+            w = sd["net.0.weight"]                              # [obs_0 | ... | obs_N-1 | actions]
+            assert w.shape[1] == N * (old_dim + self.action_dim)
+            cols = []
+            for a in range(N):
+                cols.append(w[:, a * old_dim:(a + 1) * old_dim])
+                cols.append(w.new_zeros(w.shape[0], extra))     # this agent's new inputs
+            cols.append(w[:, N * old_dim:])                     # joint actions stay last
+            sd["net.0.weight"] = torch.cat(cols, dim=1)
+            return sd
+
+        self.actor.load_state_dict(expand_actor(ckpt["actor"]))
+        self.actor_target.load_state_dict(expand_actor(ckpt["actor_target"]))
+        for i in range(N):
+            self.critics[i].load_state_dict(expand_critic(ckpt["critics"][i]))
+            self.critic_targets[i].load_state_dict(expand_critic(ckpt["critic_targets"][i]))
+        print(f"Checkpoint expanded <- {path} (obs {old_dim} -> {new_dim}, "
+              f"critic {N * (old_dim + self.action_dim)} -> {N * (new_dim + self.action_dim)})")
+
     # EPISODE HOOKS 
 
     def episode_reset(self):

@@ -10,5 +10,16 @@ __pycache__/
 # Generated visualization outputs
 visualization/*.npz
 visualization/*.avi
+visualization/*.gif
 
 visualization/results/
+
+# Editor settings
+.vscode/
+
+# One-off analysis outputs (figures, CSVs, replays)
+analysis/
+
+# Presentation and report exports
+*.pptx
+*.pdf

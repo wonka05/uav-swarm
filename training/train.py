@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import yaml
 import numpy as np
 import pandas as pd
@@ -13,6 +14,18 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from env.forest_env import ForestEnv
 from agents.maddpg import MADDPG
+
+
+def make_env(cfg: dict) -> ForestEnv:
+    """Build the env from THIS cfg. ForestEnv only takes a YAML path, and with
+    no argument it silently opens configs/default.yaml, so hand it the dict
+    through a temporary file that is deleted right after construction."""
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.safe_dump(cfg, f)
+    try:
+        return ForestEnv(f.name)
+    finally:
+        os.remove(f.name)
 
 
 def evaluate_deterministic(env, agent, n_episodes):
@@ -43,6 +56,7 @@ def train(cfg: dict | None = None):
     log_dir = t_cfg["log_dir"]
     eval_freq = t_cfg.get("eval_frequency", 10)
     eval_episodes = t_cfg.get("eval_episodes", 3)
+    init_from = t_cfg.get("init_from")
 
     os.makedirs(ckpt_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
@@ -54,8 +68,10 @@ def train(cfg: dict | None = None):
     print(f"  Run ID: {run_id}")
     print(f"{'=' * 55}\n")
 
-    env = ForestEnv()
+    env = make_env(cfg)
     agent = MADDPG(cfg, obs_dim=env.obs_dim, action_dim=2)
+    if init_from:
+        agent.load_expanded(init_from)   # weights only; run counters start at 0
     writer = SummaryWriter(log_dir=os.path.join(log_dir, f"run_{run_id}"))
 
     history = {

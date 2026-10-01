@@ -9,6 +9,7 @@ environment:
   dynamic_target_ratio: 0.33
   sensor_shape: circle          # "circle" (81 cells) | "square" (121) — ablation switch
   coverage_threshold: 0.95
+  frontier_obs: false           # true = 183D: +4 frontier-target features after the 179 base features
 
 rewards:
   coverage: 0.5
@@ -42,6 +43,7 @@ training:
   eval_episodes: 10
   checkpoint_dir: checkpoints/final1500/
   log_dir: logs/final1500/
+  init_from: null               # checkpoint to warm-start from; a smaller obs_dim is zero-expanded
 
 evaluation:
   n_test_episodes: 100

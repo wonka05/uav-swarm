@@ -95,6 +95,25 @@ class VoronoiPlanner:
 
         return self.regions
 
+    def owner_map(self, agent_positions, active):
+        """Dynamic partition over the CURRENT positions of the ACTIVE agents.
+
+        Returns a (grid_size, grid_size) int array holding, for every cell,
+        the index of the nearest active agent (distance to the cell centre),
+        or -1 everywhere when no agent is active. Ties go to the lowest agent
+        index. Pure: regions/masks are left untouched and no random numbers
+        are drawn.
+        """
+        owner_idx = np.flatnonzero(np.asarray(active, dtype=bool))
+        if owner_idx.size == 0:
+            return np.full((self.grid_size, self.grid_size), -1, dtype=np.int64)
+
+        positions = np.asarray(agent_positions, dtype=np.float32)[owner_idx]  # (k, 2)
+        centres   = self.all_cells + 0.5                                      # (G*G, 2)
+        dist_sq   = ((centres[:, None, :] - positions[None, :, :]) ** 2).sum(axis=2)
+        nearest   = owner_idx[np.argmin(dist_sq, axis=1)]
+        return nearest.reshape(self.grid_size, self.grid_size)
+
     def get_region_sizes(self):
       
         return [len(r) for r in self.regions]

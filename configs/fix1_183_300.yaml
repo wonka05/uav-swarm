@@ -1,0 +1,47 @@
+environment:
+  comm_radius: 10
+  coverage_threshold: 0.95
+  dynamic_target_ratio: 0.33
+  frontier_obs: true
+  grid_size: 50
+  max_battery: 500
+  max_steps: 500
+  n_agents: 5
+  n_targets: 10
+  obs_radius: 5
+  sensor_shape: circle
+evaluation:
+  n_test_episodes: 100
+  render: false
+maddpg:
+  batch_size: 256
+  buffer_capacity: 1000000
+  gamma: 0.99
+  hidden_actor: 128
+  hidden_critic: 256
+  lr_actor: 5.0e-05
+  lr_critic: 0.0001
+  noise_decay: 0.997
+  noise_end: 0.05
+  noise_start: 0.3
+  saturation_penalty: 0.01
+  saturation_threshold: 3.0
+  tau: 0.01
+  update_frequency: 20
+rewards:
+  battery_per_step: -0.01
+  collision: -1.0
+  cooperative_alpha: 0.3
+  coverage: 0.5
+  detection: 1.0
+  redundancy: -0.1
+training:
+  checkpoint_dir: checkpoints/fix1_183_300/
+  eval_episodes: 10
+  eval_frequency: 10
+  init_from: checkpoints/final1500/maddpg_best.pt
+  log_dir: logs/fix1_183_300/
+  log_frequency: 50
+  n_episodes: 300
+  noise_start: 0.3
+  save_frequency: 100
