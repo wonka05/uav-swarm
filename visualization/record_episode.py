@@ -1,7 +1,12 @@
 """Record one deterministic episode of the trained 179D final1500 policy.
 
 Usage:
-    python visualization/record_episode.py --seed <seed> --output <path.npz>
+    python visualization/record_episode.py --seed <seed> --output <path.npz> [--mission]
+
+With --mission the policy runs under planning/mission_controller.py (staggered
+launch, return-to-home, recharging and the coverage override), the episode
+runs until coverage reaches the threshold or --mission-steps pass, and each
+frame also records every UAV's mission mode for the dashboard.
 
 The .npz holds one frame per timestep. Frame 0 is the state right after
 reset(); frame t (t >= 1) is the state after the t-th env.step(). actions[t]
@@ -28,6 +33,11 @@ from env.forest_env import ForestEnv
 from env.grid import OBSTACLE
 from agents.maddpg import MADDPG
 from planning.voronoi_planner import VoronoiPlanner
+from planning.mission_controller import (MissionConfig, MissionController,
+                                         EXPLORE, RETURN, DOCKED, STRANDED)
+
+# mission mode codes stored in the .npz "mode" array (read by pygame_dashboard.py)
+MODE_CODES = {EXPLORE: 0, RETURN: 1, DOCKED: 2, STRANDED: 3}
 
 CONFIG_PATH = os.path.join(ROOT, "configs", "default.yaml")
 CHECKPOINT_PATH = os.path.join(ROOT, "checkpoints", "final1500", "maddpg_best.pt")
@@ -48,8 +58,8 @@ def assign_target_types(dynamic_idxs, n_targets, seed):
     return types
 
 
-def snapshot(env):
-    return {
+def snapshot(env, ctrl=None):
+    frame = {
         "positions":     np.array([u.pos for u in env.uavs], dtype=np.float32),
         "velocities":    np.array([u.vel for u in env.uavs], dtype=np.float32),
         "battery":       np.array([u.battery for u in env.uavs], dtype=np.float32),
@@ -59,9 +69,12 @@ def snapshot(env):
         "detected_mask": np.array([i in env.detected for i in range(env.n_targets)], dtype=bool),
         "coverage_map":  env.coverage_map.copy(),
     }
+    if ctrl is not None:
+        frame["mode"] = np.array([MODE_CODES[m] for m in ctrl.mode], dtype=np.int8)
+    return frame
 
 
-def record(seed, output):
+def record(seed, output, mission=None, mission_steps=1000):
     with open(CONFIG_PATH) as f:
         cfg = yaml.safe_load(f)
 
@@ -76,21 +89,32 @@ def record(seed, output):
     # MADDPG construction reseeds the global RNG, so seed after it.
     np.random.seed(seed)
     obs = env.reset()
+    ctrl = None
+    if mission is not None:
+        ctrl = MissionController(mission, env.grid_size, env.n_agents)
+        obs = ctrl.reset(env)
 
     target_types = assign_target_types(env.dynamic_idxs, env.n_targets, seed)
     planner = VoronoiPlanner(grid_size=env.grid_size, n_agents=env.n_agents)
     planner.assign_regions(env.region_seeds)
 
-    frames = [snapshot(env)]
+    frames = [snapshot(env, ctrl)]
     actions = [np.zeros((env.n_agents, 2), dtype=np.float32)]
     rewards = [np.zeros(env.n_agents, dtype=np.float32)]
     coverage = [0.0]
     info = {}
 
-    for _ in range(env.max_steps):
+    for t in range(1, (mission_steps if ctrl else env.max_steps) + 1):
         acts = agent.select_actions(obs, training=False)
+        if ctrl is not None:
+            acts = ctrl.actions(env, acts)
         obs, step_rewards, done, info = env.step(acts)
-        frames.append(snapshot(env))
+        if ctrl is not None:
+            # the mission ends at the coverage threshold or when no UAV can fly again;
+            # the environment's own step limit and "all inactive" check do not apply
+            obs = ctrl.after_step(env, t)
+            done = info["coverage_rate"] >= env.coverage_threshold or ctrl.finished()
+        frames.append(snapshot(env, ctrl))
         actions.append(np.array(acts, dtype=np.float32))
         rewards.append(np.asarray(step_rewards, dtype=np.float32))
         coverage.append(float(info["coverage_rate"]))
@@ -119,6 +143,10 @@ def record(seed, output):
         "target_type_rule": "dynamic targets = animal; statics split 3 fire + 4 poi, seeded by episode seed",
         "coordinates": "(row, col) grid frame, same as env and actions",
     }
+    if ctrl is not None:
+        metadata["controller"] = "mission"
+        metadata["mission"] = {**mission.__dict__, "mission_steps": mission_steps}
+        metadata["mode_codes"] = {name: code for name, code in MODE_CODES.items()}
 
     out_dir = os.path.dirname(os.path.abspath(output))
     os.makedirs(out_dir, exist_ok=True)
@@ -152,6 +180,7 @@ def record(seed, output):
         region_masks=(planner.masks > 0.5),
         base_position=np.array(BASE_POSITION, dtype=np.int32),
         metadata=np.array(json.dumps(metadata)),
+        **({"mode": stack["mode"]} if ctrl is not None else {}),
     )
 
     print(f"Checkpoint loaded:  {metadata['checkpoint']}")
@@ -160,6 +189,9 @@ def record(seed, output):
     print(f"Final coverage:     {coverage[-1]:.1%}")
     print(f"Final detection:    {n_detected[-1]}/{env.n_targets} ({n_detected[-1] / env.n_targets:.0%})")
     print(f"Total collisions:   {total_collisions} (UAV-steps spent blocked by an obstacle)")
+    if ctrl is not None:
+        print(f"Returns to base:    {ctrl.returns}")
+        print(f"UAVs lost:          {ctrl.unable_to_return(env)}")
     print(f"Output file:        {os.path.abspath(output)}")
     return output
 
@@ -168,8 +200,18 @@ def main():
     parser = argparse.ArgumentParser(description="Record one deterministic final1500 episode.")
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--mission", action="store_true",
+                        help="run under the mission controller (staggered launch, return-home, recharge)")
+    parser.add_argument("--launch-gap", type=int, default=MissionConfig.launch_gap)
+    parser.add_argument("--recharge-steps", type=int, default=MissionConfig.recharge_steps)
+    parser.add_argument("--reserve", type=int, default=MissionConfig.reserve_steps)
+    parser.add_argument("--mission-steps", type=int, default=1000)
     args = parser.parse_args()
-    record(args.seed, args.output)
+    mission = None
+    if args.mission:
+        mission = MissionConfig(launch_gap=args.launch_gap, recharge_steps=args.recharge_steps,
+                                reserve_steps=args.reserve)
+    record(args.seed, args.output, mission, args.mission_steps)
 
 
 if __name__ == "__main__":

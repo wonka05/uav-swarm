@@ -45,6 +45,10 @@ COVER = (95, 208, 138, 88)
 VORONOI = (255, 255, 255, 80)
 AMBER = (255, 191, 0)
 DEAD = (110, 116, 124)
+HOME = (120, 200, 255)
+LOST = (228, 87, 46)
+# mission mode codes written by record_episode.py --mission
+EXPLORE, RETURN, DOCKED, STRANDED = 0, 1, 2, 3
 UAV_COLORS = [(31, 119, 180), (255, 127, 14), (44, 160, 44), (214, 39, 40), (148, 103, 189)]
 TYPE_COLORS = {"animal": (74, 163, 255), "fire": (228, 87, 46), "poi": (175, 183, 191)}
 TYPE_LABELS = {"animal": "Animals", "fire": "Fire", "poi": "Points of interest"}
@@ -69,13 +73,22 @@ def build_events(ep):
     hits[0] = False
     for f, u in zip(*np.where(hits)):
         ev.append((int(f), f"UAV{u} collision (blocked by obstacle)", AMBER))
-    for u in range(ep["active"].shape[1]):
-        low = np.where(ep["battery_fraction"][:, u] < 0.30)[0]
-        if len(low):
-            ev.append((int(low[0]), f"UAV{u} battery low (<30%)", AMBER))
-        off = np.where(~ep["active"][:, u])[0]
-        if len(off):
-            ev.append((int(off[0]), f"UAV{u} inactive (battery depleted)", MUTED))
+    if "mode" in ep:                                 # mission recording: log every mode change
+        labels = {EXPLORE: ("launched", (95, 208, 138)), RETURN: ("returning to base", HOME),
+                  DOCKED: ("docked, recharging", MUTED), STRANDED: ("LOST (battery empty in the field)", LOST)}
+        mode = ep["mode"]
+        for f in range(1, len(mode)):
+            for u in np.where(mode[f] != mode[f - 1])[0]:
+                txt, col = labels[int(mode[f, u])]
+                ev.append((f, f"UAV{u} {txt}", col))
+    else:
+        for u in range(ep["active"].shape[1]):
+            low = np.where(ep["battery_fraction"][:, u] < 0.30)[0]
+            if len(low):
+                ev.append((int(low[0]), f"UAV{u} battery low (<30%)", AMBER))
+            off = np.where(~ep["active"][:, u])[0]
+            if len(off):
+                ev.append((int(off[0]), f"UAV{u} inactive (battery depleted)", MUTED))
     cov = ep["coverage_rate"]
     for m in (0.25, 0.50, 0.75, 0.90, 0.95):
         hit = np.where(cov >= m)[0]
@@ -321,8 +334,14 @@ class Dashboard:
 
     def _draw_uavs(self, s, f):
         ep = self.ep
+        mode = ep["mode"][f] if "mode" in ep else None
         for u in range(self.n_uav):
             x, y = self._to_px(ep["positions"][f, u])
+            if mode is not None and mode[u] == DOCKED:
+                # docked UAVs wait in a row beside the base station
+                bx, by = self._to_px((1, 1))
+                pygame.draw.rect(s, UAV_COLORS[u], (bx + 12 + 9 * u, by - 3, 7, 7))
+                continue
             if not ep["active"][f, u]:
                 pygame.draw.circle(s, DEAD, (x, y), 6)
                 pygame.draw.line(s, (30, 30, 30), (x - 4, y - 4), (x + 4, y + 4), 2)
@@ -333,8 +352,13 @@ class Dashboard:
             left = (x + 7 * math.cos(a + 2.5), y + 7 * math.sin(a + 2.5))
             right = (x + 7 * math.cos(a - 2.5), y + 7 * math.sin(a - 2.5))
             pygame.draw.polygon(s, UAV_COLORS[u], [tip, left, right])
-            outline = AMBER if (ep["collided"][f, u] and f > 0) else (255, 255, 255)
-            pygame.draw.polygon(s, outline, [tip, left, right], 2 if outline == AMBER else 1)
+            if ep["collided"][f, u] and f > 0:
+                outline, width = AMBER, 2
+            elif mode is not None and mode[u] == RETURN:
+                outline, width = HOME, 2
+            else:
+                outline, width = (255, 255, 255), 1
+            pygame.draw.polygon(s, outline, [tip, left, right], width)
 
     def _text(self, txt, pos, font=None, color=TEXT):
         self.screen.blit((font or self.font).render(txt, True, color), pos)
@@ -423,7 +447,14 @@ class Dashboard:
             bcol = (80, 200, 120) if frac > 0.5 else AMBER if frac > 0.3 else (228, 87, 46)
             pygame.draw.rect(self.screen, bcol, (bar.left, bar.top, int(bar.width * frac), bar.height))
             self._text(f"{100 * frac:3.0f}%", (x0 + 286, yy))
-            if not ep["active"][f, u]:
+            m = int(ep["mode"][f, u]) if "mode" in ep else None
+            if m == STRANDED:
+                st, sc = "LOST", LOST
+            elif m == DOCKED:
+                st, sc = ("DOCKED", MUTED) if frac >= 0.999 else ("CHARGING", HOME)
+            elif m == RETURN:
+                st, sc = "RETURNING", HOME
+            elif not ep["active"][f, u]:
                 st, sc = "INACTIVE", MUTED
             elif ep["collided"][f, u] and f > 0:
                 st, sc = "COLLISION", AMBER
@@ -454,8 +485,9 @@ class Dashboard:
     def render(self):
         self.screen.fill(BG)
         m = self.meta
+        kind = "  |  mission controller" if m.get("controller") == "mission" else ""
         self._text(f"UAV swarm surveillance replay  |  seed {m['seed']}  |  "
-                   f"{os.path.basename(m['checkpoint'])}  |  {m['episode_length']} steps",
+                   f"{os.path.basename(m['checkpoint'])}  |  {m['episode_length']} steps{kind}",
                    (GRID_ORIGIN[0], 14), self.font_b)
         self._draw_map()
         self._draw_panel()
