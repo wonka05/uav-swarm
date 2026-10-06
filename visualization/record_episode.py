@@ -1,12 +1,15 @@
 """Record one deterministic episode of the trained 179D final1500 policy.
 
 Usage:
-    python visualization/record_episode.py --seed <seed> --output <path.npz> [--mission]
+    python visualization/record_episode.py --seed <seed> --output <path.npz>
+        [--mission] [--coverage-target 1.0]
 
 With --mission the policy runs under planning/mission_controller.py (staggered
 launch, return-to-home, recharging and the coverage override), the episode
-runs until coverage reaches the threshold or --mission-steps pass, and each
+runs until coverage reaches the target or --mission-steps pass, and each
 frame also records every UAV's mission mode for the dashboard.
+--coverage-target replaces the environment's coverage_threshold (0.95) for
+this recording only; the config file is not changed.
 
 The .npz holds one frame per timestep. Frame 0 is the state right after
 reset(); frame t (t >= 1) is the state after the t-th env.step(). actions[t]
@@ -74,13 +77,15 @@ def snapshot(env, ctrl=None):
     return frame
 
 
-def record(seed, output, mission=None, mission_steps=1000):
+def record(seed, output, mission=None, mission_steps=1500, coverage_target=None):
     with open(CONFIG_PATH) as f:
         cfg = yaml.safe_load(f)
 
     env = ForestEnv(CONFIG_PATH)
     if env.obs_dim != 179:
         raise RuntimeError(f"expected the 179D environment, got obs_dim={env.obs_dim}")
+    if coverage_target is not None:
+        env.coverage_threshold = coverage_target       # in memory only; the config is untouched
 
     agent = MADDPG(cfg, obs_dim=env.obs_dim, action_dim=2)
     agent.load(CHECKPOINT_PATH)
@@ -143,6 +148,8 @@ def record(seed, output, mission=None, mission_steps=1000):
         "target_type_rule": "dynamic targets = animal; statics split 3 fire + 4 poi, seeded by episode seed",
         "coordinates": "(row, col) grid frame, same as env and actions",
     }
+    if coverage_target is not None:
+        metadata["coverage_target"] = coverage_target
     if ctrl is not None:
         metadata["controller"] = "mission"
         metadata["mission"] = {**mission.__dict__, "mission_steps": mission_steps}
@@ -205,13 +212,15 @@ def main():
     parser.add_argument("--launch-gap", type=int, default=MissionConfig.launch_gap)
     parser.add_argument("--recharge-steps", type=int, default=MissionConfig.recharge_steps)
     parser.add_argument("--reserve", type=int, default=MissionConfig.reserve_steps)
-    parser.add_argument("--mission-steps", type=int, default=1000)
+    parser.add_argument("--mission-steps", type=int, default=1500)
+    parser.add_argument("--coverage-target", type=float, default=None,
+                        help="coverage that ends the episode (default: the environment's coverage_threshold)")
     args = parser.parse_args()
     mission = None
     if args.mission:
         mission = MissionConfig(launch_gap=args.launch_gap, recharge_steps=args.recharge_steps,
                                 reserve_steps=args.reserve)
-    record(args.seed, args.output, mission, args.mission_steps)
+    record(args.seed, args.output, mission, args.mission_steps, args.coverage_target)
 
 
 if __name__ == "__main__":

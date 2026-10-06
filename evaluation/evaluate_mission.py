@@ -2,20 +2,23 @@
 
 Usage:
     python -m evaluation.evaluate_mission [--checkpoint PATH] [--episodes N]
-        [--launch-gap 40] [--recharge-steps 100] [--reserve 10]
-        [--mission-steps 1000] [--stall 10]
+        [--coverage-target 1.0] [--launch-gap 40] [--recharge-steps 100]
+        [--reserve 10] [--mission-steps 1500] [--stall 10]
 
 Four arms, all on the same maps (the global NumPy state is saved before every
-reset of the first arm and restored for the others):
+map of evaluation/evaluate.py's run and restored for each arm):
 
   1. Policy only              - reproduces evaluation/evaluate.py exactly
   2. + coverage override      - stalled UAVs are routed to uncovered ground
   3. + return-home, recharge  - all UAVs launch together
   4. + staggered launch       - the full mission controller
 
-Arms 1-2 keep the 500-step limit. Arms 3-4 run until coverage reaches the
-environment's threshold or --mission-steps pass, because recharging lets a
-mission outlast one battery. Nothing is trained or written to disk.
+A mission ends when coverage reaches the target (default: the environment's
+coverage_threshold, 0.95; --coverage-target 1.0 asks for every cell). Arms 1-2
+keep the 500-step limit. Arms 3-4 run up to --mission-steps, because
+recharging lets a mission outlast one battery. With a non-default target the
+maps are first fixed by replaying evaluate.py, so every target is measured on
+the same 100 maps. Nothing is trained or written to disk.
 """
 from __future__ import annotations
 
@@ -67,7 +70,7 @@ def summarise(name, res):
     print(f"\n===== {name} =====")
     print(f"Mean Coverage:        {cov.mean():.1%}   (median {np.median(cov):.1%}, worst {cov.min():.1%})")
     print(f"Mean Detection:       {g('detection').mean():.1%}")
-    print(f"Mission complete:     {int(g('complete').sum())}/{n}   (coverage reached the threshold)")
+    print(f"Mission complete:     {int(g('complete').sum())}/{n}   (coverage reached the target)")
     print(f"Mean mission length:  {g('length').mean():.0f} steps")
     print(f"UAVs lost:            {g('lost').mean():.2f} per mission   "
           f"(missions losing any: {int((g('lost') > 0).sum())}/{n})")
@@ -86,7 +89,9 @@ def main():
     p.add_argument("--launch-gap", type=int, default=40)
     p.add_argument("--recharge-steps", type=int, default=100)
     p.add_argument("--reserve", type=int, default=10)
-    p.add_argument("--mission-steps", type=int, default=1000)
+    p.add_argument("--coverage-target", type=float, default=None,
+                   help="coverage that completes a mission (default: the environment's coverage_threshold)")
+    p.add_argument("--mission-steps", type=int, default=1500)
     p.add_argument("--stall", type=int, default=10)
     args = p.parse_args()
 
@@ -98,9 +103,12 @@ def main():
     agent.actor.eval()
     n = args.episodes or cfg["evaluation"]["n_test_episodes"]
 
+    target = env.coverage_threshold if args.coverage_target is None else args.coverage_target
+    default_target = target == env.coverage_threshold
+
     common = dict(recharge_steps=args.recharge_steps, reserve_steps=args.reserve, stall_limit=args.stall)
     arms = [
-        ("1. POLICY ONLY (same as evaluate.py)",
+        ("1. POLICY ONLY" + (" (same as evaluate.py)" if default_target else ""),
          MissionConfig(coverage_override=False, return_home=False, recharge=False, launch_gap=0, **common), env.max_steps),
         ("2. + COVERAGE OVERRIDE",
          MissionConfig(coverage_override=True, return_home=False, recharge=False, launch_gap=0, **common), env.max_steps),
@@ -110,15 +118,24 @@ def main():
          MissionConfig(launch_gap=args.launch_gap, **common), args.mission_steps),
     ]
 
-    print(f"Evaluating: {args.checkpoint} | {n} maps | recharge {args.recharge_steps} steps | "
-          f"reserve {args.reserve} steps | mission limit {args.mission_steps} steps", flush=True)
+    print(f"Evaluating: {args.checkpoint} | {n} maps | coverage target {target:.0%} | "
+          f"recharge {args.recharge_steps} steps | reserve {args.reserve} steps | "
+          f"mission limit {args.mission_steps} steps", flush=True)
     states = []
+    if not default_target:
+        # fix the maps first: replay evaluate.py, saving the RNG state before every map
+        print("Fixing the evaluation maps by replaying evaluate.py ...", flush=True)
+        replay = MissionController(arms[0][1], env.grid_size, env.n_agents)
+        for ep in range(n):
+            states.append(np.random.get_state())
+            run_episode(env, agent, replay, env.max_steps)
+        env.coverage_threshold = target              # in memory only; the config is untouched
     for a, (name, mcfg, max_steps) in enumerate(arms):
         ctrl = MissionController(mcfg, env.grid_size, env.n_agents)
         res, t0 = [], time.time()
         for ep in range(n):
-            if a == 0:
-                states.append(np.random.get_state())
+            if len(states) < n:
+                states.append(np.random.get_state())  # arm 1 at the default target is evaluate.py's run
             else:
                 np.random.set_state(states[ep])
             res.append(run_episode(env, agent, ctrl, max_steps))

@@ -13,7 +13,10 @@ trained networks. Every step it decides, for each UAV, who flies it:
 * coverage override - a UAV that has revealed no new cell for stall_limit
                       steps is sent along the shortest path to the nearest
                       reachable uncovered cell of its dynamic Voronoi region,
-                      then handed back to the policy
+                      then handed back to the policy. Once the only uncovered
+                      cells left are walled in by obstacles, it is sent to the
+                      nearest reachable spot whose sensor footprint covers one,
+                      so the last cells are found on purpose, not by chance
 
 All routing uses shortest obstacle-free paths, so a UAV cannot get trapped in
 a pocket of obstacles. A docked UAV is marked inactive in the environment, so
@@ -27,6 +30,7 @@ import heapq
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.ndimage import binary_dilation
 
 from env.grid import FREE, OBSTACLE, TARGET, footprint_cells
 from planning.voronoi_planner import VoronoiPlanner
@@ -118,6 +122,7 @@ class MissionController:
         self.stall = np.zeros(self.n, dtype=int)
         self.target = [None] * self.n
         self.route = [None] * self.n                 # distance field towards the target
+        self.see_target = [False] * self.n           # target is a viewpoint for walled-in cells
         self.deadline = [0.0] * self.n
         self.returns = 0
         self.controlled_steps = 0
@@ -146,13 +151,27 @@ class MissionController:
         if cfg.coverage_override:
             uncovered = self.navigable & ~env.coverage_map
             candidates = uncovered & self.reachable & ~self.blocked
+            see_mode = not candidates.any()
+            if see_mode:
+                # only walled-in cells are left: target the reachable spots whose
+                # footprint covers one of them (the footprint is symmetric)
+                walled = uncovered & ~self.reachable
+                candidates = (binary_dilation(walled, structure=env.footprint_mask)
+                              & self.reachable & ~self.blocked)
+            sees = None
+            if see_mode or any(self.see_target):
+                sees = binary_dilation(uncovered, structure=env.footprint_mask)
             owner = None
             for i, uav in enumerate(env.uavs):
                 if self.mode[i] != EXPLORE:
                     self._release(i)
                     continue
                 if self.target[i] is not None:
-                    if not uncovered[self.target[i]]:
+                    if self.see_target[i]:
+                        reached = not sees[self.target[i]]   # nothing uncovered left in view
+                    else:
+                        reached = not uncovered[self.target[i]]
+                    if reached:
                         self._release(i)             # covered: hand back to the policy
                     elif t > self.deadline[i]:
                         self.blocked[self.target[i]] = True   # overran its route: give up on it
@@ -163,6 +182,7 @@ class MissionController:
                         exploring = np.array([m == EXPLORE for m in self.mode], dtype=bool)
                         owner = self.planner.owner_map(positions, exploring)
                     self._assign(env.grid, uav, i, candidates, owner, t)
+                    self.see_target[i] = see_mode and self.target[i] is not None
                 if self.target[i] is not None:
                     acts[i] = follow(self.route[i], uav)
                     self.controlled_steps += 1
@@ -239,6 +259,7 @@ class MissionController:
     def _release(self, i):
         self.target[i] = None
         self.route[i] = None
+        self.see_target[i] = False
 
     def _steps_home(self, uav):
         return self.home[uav.grid_pos] + 1           # + 1 to re-centre in the current cell
