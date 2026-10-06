@@ -23,6 +23,13 @@ a pocket of obstacles. A docked UAV is marked inactive in the environment, so
 it neither moves, senses nor drains its battery. Returning and docked UAVs are
 left out of the Voronoi split, so their uncovered ground passes to the UAVs
 still flying.
+
+With MissionConfig(safety=True) the controller also flies as if mistakes were
+fatal (see planning/safety.py): every action passes the safety supervisor
+(obstacles, map edge, minimum distance between UAVs), routes never cut
+corners, each UAV has its own landing pad, return-to-home keeps a percentage
+reserve with a margin on the trip estimate, and decisions are taken from
+measured positions, optionally with simulated position error.
 """
 from __future__ import annotations
 
@@ -34,6 +41,8 @@ from scipy.ndimage import binary_dilation
 
 from env.grid import FREE, OBSTACLE, TARGET, footprint_cells
 from planning.voronoi_planner import VoronoiPlanner
+from planning.safety import (LANDING_PADS, SafetySupervisor, cell_centre, cell_of,
+                             robust_follow, safe_distance_field)
 
 MOVE_COST = 1.2              # battery per moving step, as in UAV._drain_battery
 BASE_CELL = (1, 1)           # ForestEnv.reset() places the base here
@@ -55,6 +64,13 @@ class MissionConfig:
     recharge_steps: int = 100    # steps for an empty battery to refill
     reserve_steps: int = 10      # spare flying steps kept on top of the trip home
     stall_limit: int = 10        # steps without new coverage before the override
+    # ---- safety layer (off by default, so results without it are unchanged) ----
+    safety: bool = False         # supervisor, corner-free routing, landing pads, robust following
+    separation: float = 1.0      # minimum distance between flying UAVs, in cells
+    reserve_fraction: float = 0.2    # battery share kept in reserve for the trip home
+    trip_margin: float = 1.3     # safety factor on the estimated trip home
+    position_noise: float = 0.0  # std of the simulated position error, in cells
+    noise_seed: int = 0          # seed of the private RNG for that error
 
 
 def distance_field(grid, source):
@@ -108,13 +124,30 @@ class MissionController:
         self.cfg = cfg
         self.n = n_agents
         self.planner = VoronoiPlanner(grid_size=grid_size, n_agents=n_agents)
+        # the supervisor's margin covers about 95 % of the simulated position error
+        self.supervisor = SafetySupervisor(cfg.separation, margin=2.0 * cfg.position_noise) if cfg.safety else None
+        if cfg.safety and n_agents > len(LANDING_PADS):
+            raise ValueError(f"only {len(LANDING_PADS)} landing pads are defined")
+        self.episode = 0
 
     # ------------------------------------------------------------------ setup
     def reset(self, env):
         """Call right after env.reset(); returns the observations to act on."""
         self.t = 0
-        self.home = distance_field(env.grid, BASE_CELL)
+        self.episode += 1
         self.navigable = (env.grid == FREE) | (env.grid == TARGET)
+        if self.cfg.safety:
+            # every UAV lives on its own pad and routes home to it without cutting corners;
+            # position error comes from a private RNG, so the maps' random stream is untouched
+            self.pads = list(LANDING_PADS[:self.n])
+            self.homes = [safe_distance_field(env.grid, pad) for pad in self.pads]
+            self.home = self.homes[0]
+            self.rng = np.random.default_rng((self.cfg.noise_seed, self.episode))
+            self.supervisor.interventions = 0
+            for i, uav in enumerate(env.uavs):
+                uav.pos = cell_centre(*self.pads[i], env.grid_size)
+        else:
+            self.home = distance_field(env.grid, BASE_CELL)
         self.reachable = np.isfinite(self.home)
         self.blocked = np.zeros_like(self.navigable)  # targets given up on
         self.mode = [EXPLORE] * self.n
@@ -139,12 +172,11 @@ class MissionController:
         acts = list(policy_actions)
         cfg = self.cfg
         t = self.t + 1                               # the step about to be taken
+        pos = self._measured(env)                    # what the UAVs believe their positions are
 
         for i, uav in enumerate(env.uavs):           # battery check: time to head home?
             if self.mode[i] == EXPLORE and cfg.return_home:
-                # +3: the next exploring step can add up to 2 to the trip, plus re-centring
-                needed = MOVE_COST * (self._steps_home(uav) + 3 + cfg.reserve_steps)
-                if uav.battery <= needed:
+                if uav.battery <= self._battery_needed(i, uav, pos[i]):
                     self.mode[i] = RETURN
                     self._release(i)
 
@@ -178,21 +210,27 @@ class MissionController:
                         self._release(i)
                 if self.target[i] is None and self.stall[i] >= cfg.stall_limit and candidates.any():
                     if owner is None:
-                        positions = np.array([u.pos for u in env.uavs], dtype=np.float32)
                         exploring = np.array([m == EXPLORE for m in self.mode], dtype=bool)
-                        owner = self.planner.owner_map(positions, exploring)
-                    self._assign(env.grid, uav, i, candidates, owner, t)
+                        owner = self.planner.owner_map(pos, exploring)
+                    self._assign(env.grid, i, pos[i], candidates, owner, t)
                     self.see_target[i] = see_mode and self.target[i] is not None
                 if self.target[i] is not None:
-                    acts[i] = follow(self.route[i], uav)
+                    acts[i] = self._follow(env.grid, self.route[i], uav, pos[i])
                     self.controlled_steps += 1
 
         for i, uav in enumerate(env.uavs):
             if self.mode[i] == RETURN:
-                acts[i] = follow(self.home, uav)
+                acts[i] = self._follow(env.grid, self._home_field(i), uav, pos[i])
                 self.controlled_steps += 1
             if self.mode[i] in (EXPLORE, RETURN):
                 self.flying_steps += 1
+
+        if cfg.safety:
+            # returning UAVs (lowest battery first) get right of way, then the rest in index order
+            flying = [m in (EXPLORE, RETURN) for m in self.mode]
+            order = sorted(range(self.n), key=lambda i: (self.mode[i] != RETURN,
+                                                         env.uavs[i].battery if self.mode[i] == RETURN else 0.0, i))
+            acts = self.supervisor.filter(env.grid, pos, acts, flying, order)
 
         self._coverage_before = env.coverage_map.copy()
         return acts
@@ -211,7 +249,8 @@ class MissionController:
                     (footprint_cells(env.grid_size, gx, gy, env.footprint_mask, env.obs_radius)
                      & self.navigable & ~self._coverage_before).any())
                 self.stall[i] = 0 if revealed else self.stall[i] + 1
-                if self.mode[i] == RETURN and (gx, gy) == BASE_CELL:
+                dock_cell = self.pads[i] if self.cfg.safety else BASE_CELL
+                if self.mode[i] == RETURN and (gx, gy) == dock_cell:
                     self._dock(uav, i, ready=t if self.cfg.recharge else np.inf)
             elif self.mode[i] == DOCKED:
                 if self.cfg.recharge:
@@ -237,14 +276,21 @@ class MissionController:
             if self.mode[i] == STRANDED:
                 lost += 1
             elif self.mode[i] in (EXPLORE, RETURN):
-                if uav.battery < MOVE_COST * self._steps_home(uav):
+                if uav.battery < MOVE_COST * self._steps_home(i, uav):
                     lost += 1
         return lost
 
+    def interventions(self):
+        """Actions the safety supervisor had to change (0 without the safety layer)."""
+        return self.supervisor.interventions if self.supervisor is not None else 0
+
     # -------------------------------------------------------------- helpers
-    def _assign(self, grid, uav, i, candidates, owner, t):
+    def _field(self, grid, source):
+        return safe_distance_field(grid, source) if self.cfg.safety else distance_field(grid, source)
+
+    def _assign(self, grid, i, p, candidates, owner, t):
         """Nearest reachable uncovered cell by flying distance: own region first, else anywhere."""
-        from_uav = distance_field(grid, uav.grid_pos)
+        from_uav = self._field(grid, cell_of(p, grid.shape[0]))
         pool = candidates & np.isfinite(from_uav)
         own = pool & (owner == i)
         pool = own if own.any() else pool
@@ -253,20 +299,46 @@ class MissionController:
         masked = np.where(pool, from_uav, np.inf)
         cell = tuple(int(c) for c in np.unravel_index(np.argmin(masked), masked.shape))
         self.target[i] = cell
-        self.route[i] = distance_field(grid, cell)
+        self.route[i] = self._field(grid, cell)
         self.deadline[i] = t + 1.5 * from_uav[cell] + 10
+
+    def _measured(self, env):
+        """True positions, plus simulated position error when the safety layer models one."""
+        pos = np.array([u.pos for u in env.uavs], dtype=np.float32)
+        if self.cfg.safety and self.cfg.position_noise > 0:
+            pos = pos + self.rng.normal(0.0, self.cfg.position_noise, pos.shape).astype(np.float32)
+        return pos
+
+    def _home_field(self, i):
+        return self.homes[i] if self.cfg.safety else self.home
+
+    def _follow(self, grid, field, uav, p):
+        return robust_follow(grid, field, p) if self.cfg.safety else follow(field, uav)
+
+    def _battery_needed(self, i, uav, p):
+        """Battery at which an exploring UAV must turn for home."""
+        if self.cfg.safety:
+            trip = self.homes[i][cell_of(p, self.homes[i].shape[0])] + 1.5
+            return MOVE_COST * (self.cfg.trip_margin * trip + 3) + self.cfg.reserve_fraction * uav.max_battery
+        # +3: the next exploring step can add up to 2 to the trip, plus re-centring
+        return MOVE_COST * (self._steps_home(i, uav) + 3 + self.cfg.reserve_steps)
 
     def _release(self, i):
         self.target[i] = None
         self.route[i] = None
         self.see_target[i] = False
 
-    def _steps_home(self, uav):
+    def _steps_home(self, i, uav):
+        if self.cfg.safety:
+            return self.homes[i][uav.grid_pos] + 1.5
         return self.home[uav.grid_pos] + 1           # + 1 to re-centre in the current cell
 
     def _dock(self, uav, i, ready, count=True):
         uav.is_active = False
-        uav.pos = np.array(BASE_POS, dtype=np.float32)
+        if self.cfg.safety:
+            uav.pos = cell_centre(*self.pads[i], len(self.navigable))
+        else:
+            uav.pos = np.array(BASE_POS, dtype=np.float32)
         uav.vel = np.zeros(2, dtype=np.float32)
         uav.collided = False
         self.mode[i] = DOCKED
