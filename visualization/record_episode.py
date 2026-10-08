@@ -2,7 +2,7 @@
 
 Usage:
     python visualization/record_episode.py --seed <seed> --output <path.npz>
-        [--mission] [--coverage-target 1.0]
+        [--mission] [--coverage-target 1.0] [--safety] [--position-noise 0.1] [--smart-planner]
 
 With --mission the policy runs under planning/mission_controller.py (staggered
 launch, return-to-home, recharging and the coverage override), the episode
@@ -199,6 +199,8 @@ def record(seed, output, mission=None, mission_steps=1500, coverage_target=None)
     if ctrl is not None:
         print(f"Returns to base:    {ctrl.returns}")
         print(f"UAVs lost:          {ctrl.unable_to_return(env)}")
+        if mission.safety:
+            print(f"Safety corrections: {ctrl.interventions()}")
     print(f"Output file:        {os.path.abspath(output)}")
     return output
 
@@ -215,11 +217,22 @@ def main():
     parser.add_argument("--mission-steps", type=int, default=1500)
     parser.add_argument("--coverage-target", type=float, default=None,
                         help="coverage that ends the episode (default: the environment's coverage_threshold)")
+    parser.add_argument("--safety", action="store_true",
+                        help="with --mission: add the safety layer (planning/safety.py)")
+    parser.add_argument("--position-noise", type=float, default=0.0,
+                        help="with --safety: std of the simulated position error, in cells")
+    parser.add_argument("--smart-planner", action="store_true",
+                        help="with --mission: targets that reveal most ground per distance, kept "
+                             "until fresh ground, taken over after 3 unproductive steps")
     args = parser.parse_args()
+    if (args.safety or args.position_noise or args.smart_planner) and not args.mission:
+        parser.error("--safety, --position-noise and --smart-planner need --mission")
     mission = None
     if args.mission:
+        smart = dict(gain_targets=True, chain_targets=True, stall_limit=3) if args.smart_planner else {}
         mission = MissionConfig(launch_gap=args.launch_gap, recharge_steps=args.recharge_steps,
-                                reserve_steps=args.reserve)
+                                reserve_steps=args.reserve, safety=args.safety,
+                                position_noise=args.position_noise, **smart)
     record(args.seed, args.output, mission, args.mission_steps, args.coverage_target)
 
 

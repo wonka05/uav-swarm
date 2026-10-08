@@ -30,6 +30,11 @@ fatal (see planning/safety.py): every action passes the safety supervisor
 corners, each UAV has its own landing pad, return-to-home keeps a percentage
 reserve with a margin on the trip estimate, and decisions are taken from
 measured positions, optionally with simulated position error.
+
+With gain_targets / chain_targets the override becomes smarter: a stalled UAV
+is sent to the spot that reveals the most uncovered ground per distance flown
+(never near another UAV's target), and the planner keeps it, target after
+target, until it stands in fresh ground the policy can explore well.
 """
 from __future__ import annotations
 
@@ -37,7 +42,7 @@ import heapq
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.ndimage import binary_dilation
+from scipy.ndimage import binary_dilation, convolve
 
 from env.grid import FREE, OBSTACLE, TARGET, footprint_cells
 from planning.voronoi_planner import VoronoiPlanner
@@ -71,6 +76,12 @@ class MissionConfig:
     trip_margin: float = 1.3     # safety factor on the estimated trip home
     position_noise: float = 0.0  # std of the simulated position error, in cells
     noise_seed: int = 0          # seed of the private RNG for that error
+    # ---- smarter override (off by default) ----
+    gain_targets: bool = False   # pick the spot revealing most uncovered cells per distance flown
+    gain_offset: float = 10.0    # score = cells revealed / (flying distance + gain_offset)
+    chain_targets: bool = False  # on reaching a target take the next one, unless the area is fresh
+    hand_back_cells: int = 30    # uncovered cells nearby that count as fresh ground for the policy
+    hand_back_radius: int = 10   # ... counted within this many cells
 
 
 def distance_field(grid, source):
@@ -156,6 +167,7 @@ class MissionController:
         self.target = [None] * self.n
         self.route = [None] * self.n                 # distance field towards the target
         self.see_target = [False] * self.n           # target is a viewpoint for walled-in cells
+        self.chaining = [False] * self.n             # planner keeps the UAV after reaching a target
         self.deadline = [0.0] * self.n
         self.returns = 0
         self.controlled_steps = 0
@@ -180,7 +192,9 @@ class MissionController:
                     self.mode[i] = RETURN
                     self._release(i)
 
-        if cfg.coverage_override:
+        if cfg.coverage_override and cfg.gain_targets:
+            self._gain_override(env, pos, acts, t)
+        elif cfg.coverage_override:
             uncovered = self.navigable & ~env.coverage_map
             candidates = uncovered & self.reachable & ~self.blocked
             see_mode = not candidates.any()
@@ -284,6 +298,81 @@ class MissionController:
         """Actions the safety supervisor had to change (0 without the safety layer)."""
         return self.supervisor.interventions if self.supervisor is not None else 0
 
+    # ------------------------------------------------------ smarter override
+    def _gain_override(self, env, pos, acts, t):
+        """Override that targets the spots revealing the most uncovered ground per distance flown.
+
+        A UAV is taken over after stall_limit unproductive steps. With chain_targets it is
+        not handed back after one target: it gets the next target straight away, and only
+        returns to the policy once it stands in fresh ground (hand_back_cells uncovered
+        cells within hand_back_radius), where the policy explores well.
+        """
+        cfg = self.cfg
+        uncovered = self.navigable & ~env.coverage_map
+        gain = None                                  # uncovered cells each spot's footprint would reveal
+        owner = None
+        for i, uav in enumerate(env.uavs):
+            if self.mode[i] != EXPLORE:
+                self._release(i)
+                self.chaining[i] = False
+                continue
+            if self.target[i] is not None:
+                if gain is None:
+                    gain = self._gain_map(env, uncovered)
+                arrived = cell_of(pos[i], env.grid_size) == self.target[i]
+                if gain[self.target[i]] == 0 or arrived:
+                    self._release(i)
+                    self.chaining[i] = cfg.chain_targets and not self._fresh(uncovered, pos[i])
+                elif t > self.deadline[i]:
+                    self.blocked[self.target[i]] = True   # overran its route: give up on it
+                    self._release(i)
+            if self.target[i] is None and (self.chaining[i] or self.stall[i] >= cfg.stall_limit):
+                if gain is None:
+                    gain = self._gain_map(env, uncovered)
+                if owner is None:
+                    exploring = np.array([m == EXPLORE for m in self.mode], dtype=bool)
+                    owner = self.planner.owner_map(pos, exploring)
+                self._assign_gain(env, i, pos[i], gain, owner, t)
+                if self.target[i] is None:
+                    self.chaining[i] = False
+            if self.target[i] is not None:
+                acts[i] = self._follow(env.grid, self.route[i], uav, pos[i])
+                self.controlled_steps += 1
+
+    @staticmethod
+    def _gain_map(env, uncovered):
+        """For every cell: uncovered navigable cells inside the footprint of a UAV standing there."""
+        return convolve(uncovered.astype(np.int32), env.footprint_mask.astype(np.int32),
+                        mode="constant", cval=0)
+
+    def _fresh(self, uncovered, p):
+        r = self.cfg.hand_back_radius
+        x, y = cell_of(p, uncovered.shape[0])
+        window = uncovered[max(0, x - r):x + r + 1, max(0, y - r):y + r + 1]
+        return int(window.sum()) >= self.cfg.hand_back_cells
+
+    def _assign_gain(self, env, i, p, gain, owner, t):
+        """Best spot by cells revealed / (flying distance + gain_offset): own region first, else anywhere.
+
+        Spots near another UAV's current target are skipped, so two UAVs do not chase the same ground.
+        """
+        grid = env.grid
+        from_uav = self._field(grid, cell_of(p, grid.shape[0]))
+        pool = (gain > 0) & np.isfinite(from_uav) & ~self.blocked
+        r = env.obs_radius
+        for j, tj in enumerate(self.target):
+            if j != i and tj is not None:
+                pool[max(0, tj[0] - r):tj[0] + r + 1, max(0, tj[1] - r):tj[1] + r + 1] = False
+        own = pool & (owner == i)
+        pool = own if own.any() else pool
+        if not pool.any():
+            return
+        score = np.where(pool, gain / (from_uav + self.cfg.gain_offset), -1.0)
+        cell = tuple(int(c) for c in np.unravel_index(np.argmax(score), score.shape))
+        self.target[i] = cell
+        self.route[i] = self._field(grid, cell)
+        self.deadline[i] = t + 1.5 * from_uav[cell] + 10
+
     # -------------------------------------------------------------- helpers
     def _field(self, grid, source):
         return safe_distance_field(grid, source) if self.cfg.safety else distance_field(grid, source)
@@ -344,6 +433,7 @@ class MissionController:
         self.mode[i] = DOCKED
         self.ready[i] = ready
         self._release(i)
+        self.chaining[i] = False
         if count:
             self.returns += 1
 
@@ -353,3 +443,4 @@ class MissionController:
         self.mode[i] = EXPLORE
         self.stall[i] = 0
         self._release(i)
+        self.chaining[i] = False

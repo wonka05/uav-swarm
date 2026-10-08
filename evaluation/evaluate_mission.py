@@ -1,11 +1,11 @@
 """Compare mission strategies on the same evaluation maps.
 
 Usage:
-    python -m evaluation.evaluate_mission [--checkpoint PATH] [--episodes N] [--arms 1,2,3,4,5]
+    python -m evaluation.evaluate_mission [--checkpoint PATH] [--episodes N] [--arms 1,2,3,4,5,6]
         [--coverage-target 1.0] [--launch-gap 40] [--recharge-steps 100] [--reserve 10]
-        [--mission-steps 1500] [--stall 10] [--position-noise 0.0]
+        [--mission-steps 1500] [--stall 10] [--smart-stall 3] [--position-noise 0.0]
 
-Five arms, all on the same maps (the global NumPy state is saved before every
+Six arms, all on the same maps (the global NumPy state is saved before every
 map of evaluation/evaluate.py's run and restored for each arm):
 
   1. Policy only              - reproduces evaluation/evaluate.py exactly
@@ -16,10 +16,14 @@ map of evaluation/evaluate.py's run and restored for each arm):
                                 checked against obstacles, the map edge and the
                                 other UAVs; corner-free routes; own landing pads;
                                 20 % battery reserve; optional position error
+  6. + smarter planner        - arm 5, but a stalled UAV is sent to the spot that
+                                reveals most uncovered ground per distance flown,
+                                kept by the planner until it reaches fresh ground,
+                                and taken over after 3 unproductive steps, not 10
 
 A mission ends when coverage reaches the target (default: the environment's
 coverage_threshold, 0.95; --coverage-target 1.0 asks for every cell). Arms 1-2
-keep the 500-step limit; arms 3-5 run up to --mission-steps. The maps are
+keep the 500-step limit; arms 3-6 run up to --mission-steps. The maps are
 fixed by replaying evaluate.py first whenever arm 1 is not run at the default
 target. Nothing is trained or written to disk.
 
@@ -130,7 +134,7 @@ def main():
     p = argparse.ArgumentParser(description="Mission strategies on the same evaluation maps.")
     p.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT)
     p.add_argument("--episodes", type=int, default=None, help="default: evaluation.n_test_episodes")
-    p.add_argument("--arms", default="1,2,3,4,5", help="comma-separated arms to run")
+    p.add_argument("--arms", default="1,2,3,4,5,6", help="comma-separated arms to run")
     p.add_argument("--launch-gap", type=int, default=40)
     p.add_argument("--recharge-steps", type=int, default=100)
     p.add_argument("--reserve", type=int, default=10)
@@ -139,7 +143,9 @@ def main():
     p.add_argument("--mission-steps", type=int, default=1500)
     p.add_argument("--stall", type=int, default=10)
     p.add_argument("--position-noise", type=float, default=0.0,
-                   help="std of the simulated position error for arm 5, in cells")
+                   help="std of the simulated position error for arms 5-6, in cells")
+    p.add_argument("--smart-stall", type=int, default=3,
+                   help="arm 6: unproductive steps before the planner takes over")
     args = p.parse_args()
     selected = sorted({int(a) for a in args.arms.split(",")})
 
@@ -167,6 +173,11 @@ def main():
             MissionConfig(launch_gap=args.launch_gap, **common), args.mission_steps),
         5: (f"5. + SAFETY LAYER (position error {args.position_noise:g} cells)",
             MissionConfig(launch_gap=args.launch_gap, safety=True, position_noise=args.position_noise, **common),
+            args.mission_steps),
+        6: (f"6. + SMARTER PLANNER (position error {args.position_noise:g} cells)",
+            MissionConfig(launch_gap=args.launch_gap, safety=True, position_noise=args.position_noise,
+                          gain_targets=True, chain_targets=True,
+                          **{**common, "stall_limit": args.smart_stall}),
             args.mission_steps),
     }
 
