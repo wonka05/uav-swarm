@@ -83,10 +83,11 @@ def run_episode(env, agent, ctrl, max_steps):
             for j in range(i + 1, len(airborne)):
                 near += int(np.linalg.norm(airborne[i] - airborne[j]) < NEAR_MISS)
         field_counts.append(ctrl.in_field())
-        if info["coverage_rate"] >= env.coverage_threshold or ctrl.finished():
+        # patrol missions have no finish line: they run until max_steps
+        if (not ctrl.cfg.patrol and info["coverage_rate"] >= env.coverage_threshold) or ctrl.finished():
             break
     field = np.array(field_counts)
-    return {
+    return ctrl.extra_stats() | {
         "coverage": info["coverage_rate"],
         "detection": info["targets_detected"],
         "collisions": info["collision_count"],
@@ -112,7 +113,7 @@ def summarise(name, res):
     print(f"\n===== {name} =====")
     print(f"Mean Coverage:        {cov.mean():.1%}   (median {np.median(cov):.1%}, worst {cov.min():.1%})")
     print(f"Mean Detection:       {g('detection').mean():.1%}")
-    print(f"Mission complete:     {int(g('complete').sum())}/{n}   (coverage reached the target)")
+    print(f"Mission complete:     {int(g('complete').sum())}/{n}   (coverage reached the target at the end)")
     print(f"Mean mission length:  {g('length').mean():.0f} steps")
     print(f"UAVs lost:            {g('lost').mean():.2f} per mission   "
           f"(missions losing any: {int((g('lost') > 0).sum())}/{n})")
@@ -128,6 +129,18 @@ def summarise(name, res):
           f"(UAV pairs closer than {NEAR_MISS:g} cell, summed over steps)")
     print(f"Safety interventions: {g('interventions').mean():.1f} per mission")
     print(f"Collisions (final-step snapshot, as in evaluate.py): {g('collisions').mean():.2f}")
+    if "recent_share" in res[0]:
+        print(f"Seen in the last 100 steps: {g('recent_share').mean():.1%} of the forest on average "
+              f"(lowest moment {g('recent_share_min').mean():.1%}), second half of the mission")
+        print(f"Time since a cell was seen: mean {g('mean_age').mean():.0f} steps, "
+              f"longest at the end {g('max_age_end').mean():.0f} steps")
+        print(f"Battery swaps:        {g('swaps').mean():.1f} per mission")
+    if "events" in res[0]:
+        print(f"Events:               {g('events').mean():.1f} per mission, detected "
+              f"{g('events_detected').sum() / max(g('events').sum(), 1):.1%}")
+        print(f"Time to detect:       mean {np.nanmean(g('detect_delay_mean')):.0f} steps, "
+              f"worst {np.nanmax(g('detect_delay_max')):.0f} steps")
+        print(f"Time to confirm:      mean {np.nanmean(g('confirm_delay_mean')):.0f} steps after detection")
 
 
 def main():
@@ -145,7 +158,9 @@ def main():
     p.add_argument("--position-noise", type=float, default=0.0,
                    help="std of the simulated position error for arms 5-6, in cells")
     p.add_argument("--smart-stall", type=int, default=3,
-                   help="arm 6: unproductive steps before the planner takes over")
+                   help="arms 6-8: unproductive steps before the planner takes over")
+    p.add_argument("--patrol-steps", type=int, default=1500, help="arms 7-8: length of a patrol mission")
+    p.add_argument("--spare-packs", type=int, default=3, help="arm 7: charged spare batteries at the base")
     args = p.parse_args()
     selected = sorted({int(a) for a in args.arms.split(",")})
 
@@ -179,6 +194,16 @@ def main():
                           gain_targets=True, chain_targets=True,
                           **{**common, "stall_limit": args.smart_stall}),
             args.mission_steps),
+        7: (f"7. PERSISTENT SURVEILLANCE with {args.spare_packs} spare batteries, {args.patrol_steps} steps",
+            MissionConfig(launch_gap=0, safety=True, position_noise=args.position_noise,
+                          gain_targets=True, chain_targets=True, patrol=True, events=True,
+                          spare_packs=args.spare_packs, **{**common, "stall_limit": args.smart_stall}),
+            args.patrol_steps),
+        8: (f"8. PERSISTENT SURVEILLANCE without spare batteries, {args.patrol_steps} steps",
+            MissionConfig(launch_gap=0, safety=True, position_noise=args.position_noise,
+                          gain_targets=True, chain_targets=True, patrol=True, events=True,
+                          spare_packs=0, **{**common, "stall_limit": args.smart_stall}),
+            args.patrol_steps),
     }
 
     print(f"Evaluating: {args.checkpoint} | {n} maps | arms {selected} | coverage target {target:.0%} | "

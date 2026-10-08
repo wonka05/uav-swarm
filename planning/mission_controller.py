@@ -48,6 +48,7 @@ from env.grid import FREE, OBSTACLE, TARGET, footprint_cells
 from planning.voronoi_planner import VoronoiPlanner
 from planning.safety import (LANDING_PADS, SafetySupervisor, cell_centre, cell_of,
                              robust_follow, safe_distance_field)
+from planning.surveillance import EventConfig, EventField
 
 MOVE_COST = 1.2              # battery per moving step, as in UAV._drain_battery
 BASE_CELL = (1, 1)           # ForestEnv.reset() places the base here
@@ -57,7 +58,8 @@ BASE_POS = (1.0, 1.0)        # ... and every UAV at this position
 NEIGHBOURS = ((1, 0, 1), (-1, 0, 1), (0, 1, 1), (0, -1, 1),
               (1, 1, 2), (1, -1, 2), (-1, 1, 2), (-1, -1, 2))
 
-DOCKED, EXPLORE, RETURN, STRANDED = "docked", "explore", "return", "stranded"
+DOCKED, EXPLORE, RETURN, STRANDED, TRACK = "docked", "explore", "return", "stranded", "track"
+AIRBORNE = (EXPLORE, RETURN, TRACK)
 
 
 @dataclass
@@ -82,6 +84,15 @@ class MissionConfig:
     chain_targets: bool = False  # on reaching a target take the next one, unless the area is fresh
     hand_back_cells: int = 30    # uncovered cells nearby that count as fresh ground for the policy
     hand_back_radius: int = 10   # ... counted within this many cells
+    # ---- persistent surveillance (off by default) ----
+    patrol: bool = False         # no finish line: keep revisiting the ground seen longest ago
+    stagger_first_sortie: bool = True  # in patrol, UAV i ends its first flight early so returns spread out
+    spare_packs: int = 0         # charged spare batteries at the base: a swap replaces waiting to recharge
+    swap_steps: int = 5          # steps to swap a battery
+    events: bool = False         # fires and intruders appear during the mission (hidden from the policy)
+    event_rate: float = 1 / 40   # expected new events per step
+    track_steps: int = 40        # steps a UAV keeps watching an event after confirming it
+    fresh_window: int = 100      # "recently seen" means seen within this many steps
 
 
 def distance_field(grid, source):
@@ -139,6 +150,7 @@ class MissionController:
         self.supervisor = SafetySupervisor(cfg.separation, margin=2.0 * cfg.position_noise) if cfg.safety else None
         if cfg.safety and n_agents > len(LANDING_PADS):
             raise ValueError(f"only {len(LANDING_PADS)} landing pads are defined")
+        self.events = EventField(EventConfig(rate=cfg.event_rate, seed=cfg.noise_seed)) if cfg.events else None
         self.episode = 0
 
     # ------------------------------------------------------------------ setup
@@ -172,6 +184,24 @@ class MissionController:
         self.returns = 0
         self.controlled_steps = 0
         self.flying_steps = 0
+        # persistent surveillance state
+        self.last_seen = np.full(self.navigable.shape, -1, dtype=np.int32)   # -1 = never seen
+        self.fresh_history, self.age_history = [], []
+        self._max_age = 0
+        self._track_routed_at = {}
+        max_battery = float(env.uavs[0].max_battery)
+        self.packs = [max_battery] * self.cfg.spare_packs                     # spare battery charge levels
+        self.swaps = 0
+        self.first_sortie = [True] * self.n
+        usable = max_battery * (1.0 - self.cfg.reserve_fraction)
+        stagger = self.cfg.patrol and self.cfg.stagger_first_sortie
+        self.sortie_cut = [usable * 0.8 * i / self.n if stagger else 0.0 for i in range(self.n)]
+        self.track_event = [None] * self.n
+        self.track_route = [None] * self.n
+        self.track_cell = [None] * self.n
+        self.track_until = [None] * self.n
+        if self.events is not None:
+            self.events.reset(env)
         for i, uav in enumerate(env.uavs):
             launch = i * self.cfg.launch_gap
             if launch > 0:
@@ -187,8 +217,12 @@ class MissionController:
         pos = self._measured(env)                    # what the UAVs believe their positions are
 
         for i, uav in enumerate(env.uavs):           # battery check: time to head home?
-            if self.mode[i] == EXPLORE and cfg.return_home:
-                if uav.battery <= self._battery_needed(i, uav, pos[i]):
+            if self.mode[i] in (EXPLORE, TRACK) and cfg.return_home:
+                needed = self._battery_needed(i, uav, pos[i])
+                if self.first_sortie[i]:
+                    needed += self.sortie_cut[i]     # staggered first flight (patrol only)
+                if uav.battery <= needed:
+                    self._stop_tracking(i)
                     self.mode[i] = RETURN
                     self._release(i)
 
@@ -236,13 +270,17 @@ class MissionController:
             if self.mode[i] == RETURN:
                 acts[i] = self._follow(env.grid, self._home_field(i), uav, pos[i])
                 self.controlled_steps += 1
-            if self.mode[i] in (EXPLORE, RETURN):
+            elif self.mode[i] == TRACK:
+                acts[i] = self._track_action(env, i, uav, pos[i])
+                self.controlled_steps += 1
+            if self.mode[i] in AIRBORNE:
                 self.flying_steps += 1
 
         if cfg.safety:
-            # returning UAVs (lowest battery first) get right of way, then the rest in index order
-            flying = [m in (EXPLORE, RETURN) for m in self.mode]
-            order = sorted(range(self.n), key=lambda i: (self.mode[i] != RETURN,
+            # returning UAVs (lowest battery first) get right of way, then trackers, then the rest
+            flying = [m in AIRBORNE for m in self.mode]
+            rank = {RETURN: 0, TRACK: 1}
+            order = sorted(range(self.n), key=lambda i: (rank.get(self.mode[i], 2),
                                                          env.uavs[i].battery if self.mode[i] == RETURN else 0.0, i))
             acts = self.supervisor.filter(env.grid, pos, acts, flying, order)
 
@@ -266,17 +304,26 @@ class MissionController:
                 dock_cell = self.pads[i] if self.cfg.safety else BASE_CELL
                 if self.mode[i] == RETURN and (gx, gy) == dock_cell:
                     self._dock(uav, i, ready=t if self.cfg.recharge else np.inf)
+                    self._swap_battery(uav, i, t)
+            elif self.mode[i] == TRACK and not uav.is_active:
+                self._stop_tracking(i)
+                self.mode[i] = STRANDED
             elif self.mode[i] == DOCKED:
                 if self.cfg.recharge:
                     uav.battery = min(float(uav.max_battery),
                                       uav.battery + uav.max_battery / self.cfg.recharge_steps)
                 if uav.battery >= uav.max_battery and t >= self.ready[i]:
                     self._launch(uav, i)
+        if self.packs:                               # spare batteries charge at the base
+            step = env.uavs[0].max_battery / self.cfg.recharge_steps
+            self.packs = [min(float(env.uavs[0].max_battery), p + step) for p in self.packs]
+        if self.cfg.patrol or self.events is not None:
+            self._surveillance_step(env, t)
         return env._get_all_obs()
 
     # --------------------------------------------------------------- status
     def in_field(self):
-        return sum(m in (EXPLORE, RETURN) for m in self.mode)
+        return sum(m in AIRBORNE for m in self.mode)
 
     def finished(self):
         """True when no UAV is flying and none will ever launch again."""
@@ -289,10 +336,24 @@ class MissionController:
         for i, uav in enumerate(env.uavs):
             if self.mode[i] == STRANDED:
                 lost += 1
-            elif self.mode[i] in (EXPLORE, RETURN):
+            elif self.mode[i] in AIRBORNE:
                 if uav.battery < MOVE_COST * self._steps_home(i, uav):
                     lost += 1
         return lost
+
+    def extra_stats(self):
+        """Persistent-surveillance and event results (empty for ordinary missions)."""
+        stats = {}
+        if self.cfg.patrol:
+            half = len(self.fresh_history) // 2      # steady state: the second half of the mission
+            fresh = self.fresh_history[half:] or [0.0]
+            ages = self.age_history[half:] or [0.0]
+            stats.update(recent_share=float(np.mean(fresh)), recent_share_min=float(np.min(fresh)),
+                         mean_age=float(np.mean(ages)), max_age_end=float(self._max_age),
+                         swaps=self.swaps)
+        if self.events is not None:
+            stats.update(self.events.stats(self.t))
+        return stats
 
     def interventions(self):
         """Actions the safety supervisor had to change (0 without the safety layer)."""
@@ -318,7 +379,7 @@ class MissionController:
                 continue
             if self.target[i] is not None:
                 if gain is None:
-                    gain = self._gain_map(env, uncovered)
+                    gain = self._gain_source(env, uncovered)
                 arrived = cell_of(pos[i], env.grid_size) == self.target[i]
                 if gain[self.target[i]] == 0 or arrived:
                     self._release(i)
@@ -328,7 +389,7 @@ class MissionController:
                     self._release(i)
             if self.target[i] is None and (self.chaining[i] or self.stall[i] >= cfg.stall_limit):
                 if gain is None:
-                    gain = self._gain_map(env, uncovered)
+                    gain = self._gain_source(env, uncovered)
                 if owner is None:
                     exploring = np.array([m == EXPLORE for m in self.mode], dtype=bool)
                     owner = self.planner.owner_map(pos, exploring)
@@ -338,6 +399,103 @@ class MissionController:
             if self.target[i] is not None:
                 acts[i] = self._follow(env.grid, self.route[i], uav, pos[i])
                 self.controlled_steps += 1
+
+    def _gain_source(self, env, uncovered):
+        """Coverage missions value uncovered cells; patrol values every cell by how long ago it was seen."""
+        if not self.cfg.patrol:
+            return self._gain_map(env, uncovered)
+        age = np.where(self.last_seen < 0, self.t + 2, self.t + 1 - self.last_seen).astype(np.float32)
+        weight = np.where(self.navigable, age, 0.0).astype(np.float32)
+        return convolve(weight, env.footprint_mask.astype(np.float32), mode="constant", cval=0.0)
+
+    # ------------------------------------------------- persistent surveillance
+    def _surveillance_step(self, env, t):
+        """Update when each cell was last seen, move the events and run the response to them."""
+        active = [u for u in env.uavs if u.is_active]
+        if self.cfg.patrol:
+            for u in active:
+                gx, gy = u.grid_pos
+                self.last_seen[footprint_cells(env.grid_size, gx, gy, env.footprint_mask, env.obs_radius)] = t
+            age = np.where(self.last_seen < 0, t + 1, t - self.last_seen)[self.navigable]
+            self.fresh_history.append(float((age <= self.cfg.fresh_window).mean()))
+            self.age_history.append(float(age.mean()))
+            self._max_age = int(age.max())
+        if self.events is None:
+            return
+        positions = np.array([u.pos for u in active], dtype=np.float32).reshape(-1, 2)
+        self.events.step(env, t, positions)
+        for e in self.events.events:                 # send someone to confirm every new detection
+            if e.detected is not None and e.confirmed is None and e.tracker is None:
+                i = self._nearest_free_uav(env, e.pos)
+                if i is not None:
+                    self._start_tracking(env, i, e, t)
+        for i, uav in enumerate(env.uavs):
+            if self.mode[i] != TRACK:
+                continue
+            e = self.track_event[i]
+            if e.confirmed is None and (np.linalg.norm(uav.pos - e.pos) <= 2.0 + e.radius
+                                        or uav.grid_pos == self.track_cell[i]):
+                e.confirmed = t                      # a second, close look: no false alarm
+                self.track_until[i] = t + self.cfg.track_steps
+            if self.track_until[i] is not None and t >= self.track_until[i]:
+                self._stop_tracking(i)               # watched long enough: back to patrol
+                self.mode[i] = EXPLORE
+                self.stall[i] = 0
+
+    def _nearest_free_uav(self, env, p):
+        free = [i for i in range(self.n) if self.mode[i] == EXPLORE]
+        if not free:
+            return None
+        return min(free, key=lambda i: float(np.linalg.norm(env.uavs[i].pos - p)))
+
+    def _start_tracking(self, env, i, e, t):
+        self._release(i)
+        self.chaining[i] = False
+        self.mode[i] = TRACK
+        self.track_event[i] = e
+        e.tracker = i
+        self._route_to_event(env, i, t)
+
+    def _route_to_event(self, env, i, t):
+        """Route to the event's cell, or to the nearest reachable cell if it is walled in."""
+        e = self.track_event[i]
+        cell = cell_of(e.pos, env.grid_size)
+        if not self.reachable[cell]:
+            rr, cc = np.nonzero(self.reachable)
+            k = int(np.argmin((rr + 0.5 - e.pos[0]) ** 2 + (cc + 0.5 - e.pos[1]) ** 2))
+            cell = (int(rr[k]), int(cc[k]))
+        self.track_cell[i] = cell
+        self.track_route[i] = self._field(env.grid, cell)
+        self._track_routed_at = getattr(self, "_track_routed_at", {})
+        self._track_routed_at[i] = t
+
+    def _track_action(self, env, i, uav, p):
+        """Fly to the event; then hold over a fire, or keep following an intruder."""
+        e = self.track_event[i]
+        t = self.t + 1
+        if e.kind == "intruder" and t - self._track_routed_at.get(i, t) >= 5:
+            self._route_to_event(env, i, t)          # intruders move: re-plan every 5 steps
+        if e.confirmed is not None and e.kind == "fire" and uav.grid_pos == self.track_cell[i]:
+            return np.zeros(2, dtype=np.float32)
+        return self._follow(env.grid, self.track_route[i], uav, p)
+
+    def _stop_tracking(self, i):
+        e = self.track_event[i]
+        if e is not None and e.confirmed is None:
+            e.tracker = None                         # unconfirmed: let another UAV take it
+        self.track_event[i] = self.track_route[i] = self.track_cell[i] = self.track_until[i] = None
+
+    def _swap_battery(self, uav, i, t):
+        """Swap in a charged spare battery instead of waiting for this one to recharge."""
+        if not self.packs:
+            return
+        k = int(np.argmax(self.packs))
+        if self.packs[k] < uav.max_battery - 1e-6:
+            return
+        self.packs[k] = float(uav.battery)           # the drained battery goes on the charger
+        uav.battery = float(uav.max_battery)
+        self.ready[i] = t + self.cfg.swap_steps
+        self.swaps += 1
 
     @staticmethod
     def _gain_map(env, uncovered):
@@ -434,8 +592,10 @@ class MissionController:
         self.ready[i] = ready
         self._release(i)
         self.chaining[i] = False
+        self._stop_tracking(i)
         if count:
             self.returns += 1
+            self.first_sortie[i] = False
 
     def _launch(self, uav, i):
         uav.is_active = True
