@@ -40,14 +40,20 @@ def diagonal_allowed(grid, x, y, dx, dy):
 
 
 def safe_distance_field(grid, source):
-    """Flying distance (in cells) from every cell to the source cell, never cutting corners.
+    """Flying distance (in cells) from every cell to the source, never cutting corners.
 
     Dijkstra over non-obstacle cells with distances 1 and sqrt(2); unreachable cells are inf.
+    `source` is one cell, or a boolean map: then the distance is to the nearest True cell.
     """
     size = grid.shape[0]
     dist = np.full(grid.shape, np.inf)
-    dist[source] = 0.0
-    heap = [(0.0, source)]
+    if isinstance(source, np.ndarray) and source.dtype == bool:
+        starts = [tuple(int(v) for v in c) for c in np.argwhere(source)]
+    else:
+        starts = [tuple(source)]
+    for s in starts:
+        dist[s] = 0.0
+    heap = [(0.0, s) for s in starts]
     while heap:
         d, (x, y) = heapq.heappop(heap)
         if d > dist[x, y]:
@@ -161,6 +167,11 @@ class SafetySupervisor:
     shifted by +/- margin along each axis, the separation grows by 2 * margin and
     the map edge is kept margin away, so a UAV that is not exactly where it
     believes it is still stays clear.
+
+    Two optional inputs come from the mission layer: `no_fly`, a map of cells
+    treated like obstacles (ground around a detected fire), and `keep_out`, a
+    list of (position, radius) circles to stay out of (a followed intruder).
+    A UAV already inside one is only allowed moves that take it further out.
     """
 
     def __init__(self, separation=1.0, margin=0.0):
@@ -178,15 +189,26 @@ class SafetySupervisor:
         return all(path_clear(grid, p, np.clip(end + o, 0.0, size - 1.0), skip_start=True)
                    for o in self.offsets)
 
-    def filter(self, grid, positions, actions, flying, order):
+    def filter(self, grid, positions, actions, flying, order, no_fly=None, keep_out=()):
         size = grid.shape[0]
         acts = [np.asarray(a, dtype=np.float32) for a in actions]
         self.last_changed = [False] * len(acts)      # which actions this call had to change
         planned = {}                                 # uav -> (end, midpoint)
+        # no_fly: one map for every UAV, or a list with one map (or None) per UAV
+        zones = list(no_fly) if isinstance(no_fly, (list, tuple)) else [no_fly] * len(acts)
+        fenced = {}
         for i in order:
             if not flying[i]:
                 continue
             p = positions[i]
+            zone = zones[i]
+            # inside a no-fly zone already: only real obstacles count, the mission layer steers it out
+            if zone is None or not zone.any() or zone[cell_of(p, size)]:
+                here = grid
+            else:
+                if id(zone) not in fenced:
+                    fenced[id(zone)] = np.where(zone, OBSTACLE, grid)
+                here = fenced[id(zone)]
             v = np.clip(acts[i], -1.0, 1.0)
             speed = float(np.linalg.norm(v))
             if speed > 1.0:                          # UAV.move limits speed to one cell per step
@@ -202,7 +224,9 @@ class SafetySupervisor:
                 lo, hi = min(self.margin, float(p.min())), max(size - 1.0 - self.margin, float(p.max()))
                 if end.min() < lo or end.max() > hi:     # geofence: never leave the map
                     continue
-                if not self._path_safe(grid, p, end):
+                if not self._path_safe(here, p, end):
+                    continue
+                if not self._clear_of(p, end, keep_out):
                     continue
                 gap = self._gap(i, end, p + c / 2, positions, flying, planned, order)
                 if gap >= self.separation:
@@ -218,6 +242,15 @@ class SafetySupervisor:
             acts[i] = chosen
             planned[i] = (p + chosen, p + chosen / 2)
         return acts
+
+    @staticmethod
+    def _clear_of(p, end, keep_out):
+        """End point outside every keep-out circle, or at least further out than the start."""
+        for q, radius in keep_out:
+            d_end = float(np.linalg.norm(end - q))
+            if d_end < radius and d_end <= float(np.linalg.norm(p - q)):
+                return False
+        return True
 
     @staticmethod
     def _gap(i, end, mid, positions, flying, planned, order):

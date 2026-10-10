@@ -44,6 +44,7 @@ class Event:
     detected: int | None = None   # step it was first inside a sensor footprint
     confirmed: int | None = None  # step a UAV reached it to confirm
     tracker: int | None = None    # UAV assigned to confirm and watch it
+    watch_until: int | None = None  # after confirming, watched up to this step (by successive UAVs)
 
 
 class EventField:

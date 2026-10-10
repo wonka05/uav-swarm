@@ -47,11 +47,11 @@ from env.grid import OBSTACLE
 from agents.maddpg import MADDPG
 from planning.voronoi_planner import VoronoiPlanner
 from planning.mission_controller import (MissionConfig, MissionController, FLOWN_BY,
-                                         EXPLORE, RETURN, DOCKED, STRANDED, TRACK)
+                                         EXPLORE, RETURN, DOCKED, STRANDED, TRACK, LANDED)
 from planning.safety import route_cells
 
 # mission mode codes stored in the .npz "mode" array (read by pygame_dashboard.py)
-MODE_CODES = {EXPLORE: 0, RETURN: 1, DOCKED: 2, STRANDED: 3, TRACK: 4}
+MODE_CODES = {EXPLORE: 0, RETURN: 1, DOCKED: 2, STRANDED: 3, TRACK: 4, LANDED: 5}
 ROUTE_LEN = 30                       # planned-route cells stored per UAV per frame
 
 CONFIG_PATH = os.path.join(ROOT, "configs", "default.yaml")
@@ -203,7 +203,7 @@ def record(seed, output, mission=None, mission_steps=1500, coverage_target=None)
             # the mission ends at the coverage threshold (never, for a patrol) or when no UAV
             # can fly again; the environment's own step limit and "all inactive" check do not apply
             obs = ctrl.after_step(env, t)
-            reached = info["coverage_rate"] >= env.coverage_threshold and not mission.patrol
+            reached = ctrl.coverage_estimate(env, info) >= env.coverage_threshold and not mission.patrol
             done = reached or ctrl.finished()
         frames.append(snapshot(env, ctrl))
         events.append(_event_rows(ctrl))

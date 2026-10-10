@@ -220,9 +220,10 @@ button:hover, select:hover { border-color: var(--muted); }
 'use strict';
 const $ = (id) => document.getElementById(id);
 const UAV_HEX = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'];
-const MODE = { EXPLORE: 0, RETURN: 1, DOCKED: 2, STRANDED: 3, TRACK: 4 };
+const MODE = { EXPLORE: 0, RETURN: 1, DOCKED: 2, STRANDED: 3, TRACK: 4, LANDED: 5 };
 const CONTROL = { policy: ['Policy', 'AI', '--canopy'], planner: ['Planner', 'PL', '--plan'], return: ['Return', 'RTH', '--signal'],
-                  docked: ['Docked', '', '--muted'], stranded: ['Lost', '', '--danger'], track: ['Tracking', 'TRK', '--track'] };
+                  docked: ['Docked', '', '--muted'], stranded: ['Lost', '', '--danger'], track: ['Tracking', 'TRK', '--track'],
+                  landed: ['Landed', '', '--plan'] };
 const SPEEDS = [1, 2, 5, 10, 15, 30, 60, 120];
 const ALT = 3.2, TRAIL = 60, PIN_FRAMES = 80, FLASH = 12, ROUTE_LEN = 30, PX = 10;
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -659,7 +660,7 @@ function project(el, x, y, z, w, h, show) {
 function controlOf(t, u) {
   if (ep.control) return ep.controlName[ep.control[t * ep.n + u]] || 'policy';
   if (!ep.mode) return 'policy';
-  return ['', 'return', 'docked', 'stranded', 'track'][ep.mode[t * ep.n + u]] || '';
+  return ['', 'return', 'docked', 'stranded', 'track', 'landed'][ep.mode[t * ep.n + u]] || '';
 }
 
 function update(dt, time) {
@@ -850,6 +851,7 @@ function battColour(f) { return f > 0.5 ? 'var(--canopy)' : f > 0.3 ? 'var(--pla
 function statusOf(t, u) {
   const n = ep.n, frac = ep.raw.battery[t * n + u] / 100, m = ep.mode ? ep.mode[t * n + u] : null;
   if (m === MODE.STRANDED) return ['Lost', '--danger'];
+  if (m === MODE.LANDED) return ['Emergency landing', '--plan'];
   if (m === MODE.DOCKED) return frac >= 0.999 ? ['Docked', '--muted'] : [ep.raw.packs ? 'Swapping battery' : 'Charging', '--signal'];
   if (m === MODE.RETURN) return ['Returning to base', '--signal'];
   if (m === MODE.TRACK) {
