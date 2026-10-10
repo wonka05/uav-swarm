@@ -1,57 +1,45 @@
-# MUST BE IN ROOT 
+"""VoronoiPlanner checks.
+
+Run with:  python -m tests.test_voronoi_planner   (or: python -m pytest tests)
+"""
 import numpy as np
+
 from planning.voronoi_planner import VoronoiPlanner
 
-planner = VoronoiPlanner(grid_size=50, n_agents=5)
+# five UAVs near the base station
+POSITIONS = np.array([[1.0, 1.0], [1.0, 2.0], [2.0, 1.0], [1.5, 1.5], [2.0, 2.0]], dtype=np.float32)
 
-# Simulate 5 UAVs starting near base station
-agent_positions = np.array([
-    [1.0,  1.0],
-    [1.0,  2.0],
-    [2.0,  1.0],
-    [1.5,  1.5],
-    [2.0,  2.0],
-], dtype=np.float32)
 
-print("Assigning regions...")
-regions = planner.assign_regions(agent_positions)
-print(planner)
-print()
+def test_regions_cover_the_grid_once():
+    planner = VoronoiPlanner(grid_size=50, n_agents=5)
+    regions = planner.assign_regions(POSITIONS)
+    sizes = planner.get_region_sizes()
+    assert sum(sizes) == 50 * 50
+    assert len(set().union(*regions)) == 50 * 50
+    assert planner.get_region_mask(0).sum() == sizes[0]
 
-# Check sizes
-sizes = planner.get_region_sizes()
-total = sum(sizes)
-print(f"Total cells assigned: {total} (expected: {50*50} = 2500)")
-print(f"Region sizes: {sizes}")
-print(f"Min: {min(sizes)} | Max: {max(sizes)}")
-print()
 
-# Check no overlap
-all_cells = []
-for r in regions:
-    all_cells.extend(list(r))
-unique = len(set(all_cells))
-print(f"Unique cells: {unique} | Overlap: {total - unique} cells")
-print()
+def test_reassign_hands_unvisited_cells_to_active_uavs():
+    planner = VoronoiPlanner(grid_size=50, n_agents=5)
+    regions = planner.assign_regions(POSITIONS)
+    coverage = np.zeros((50, 50), dtype=bool)
+    coverage[0:5, 0:5] = True
+    before = len(regions[0])
+    unvisited = len(planner.get_unvisited_cells(0, coverage))
+    regions = planner.reassign(0, [1, 2, 3, 4], POSITIONS, coverage)
+    assert len(regions[0]) == before - unvisited
+    assert sum(planner.get_region_sizes()) == 50 * 50
+    assert planner.masks.sum(axis=0).max() == 1
 
-# Check mask
-mask = planner.get_region_mask(0)
-print(f"Mask shape: {mask.shape}")
-print(f"Mask sum (= region 0 size): {mask.sum():.0f}")
-print()
 
-# Test reassignment
-print("Testing reassignment (agent 0 depleted)...")
-coverage_map = np.zeros((50, 50), dtype=bool)
-coverage_map[0:5, 0:5] = True  # mark some cells as visited
+def test_owner_map_uses_only_active_uavs():
+    planner = VoronoiPlanner(grid_size=10, n_agents=3)
+    positions = np.array([[0.5, 0.5], [9.5, 9.5], [5.0, 5.0]], dtype=np.float32)
+    owner = planner.owner_map(positions, [True, True, False])
+    assert owner[0, 0] == 0 and owner[9, 9] == 1 and (owner != 2).all()
+    assert (planner.owner_map(positions, [False] * 3) == -1).all()
 
-before_size = len(regions[0])
-active = [1, 2, 3, 4]
-regions = planner.reassign(0, active, agent_positions, coverage_map)
-after_size  = len(regions[0])
 
-print(f"Agent 0 region before: {before_size} cells")
-print(f"Agent 0 region after:  {after_size} cells")
-print(f"Cells redistributed:   {before_size - after_size}")
-print()
-print("ALL PLANNER TESTS PASSED")
+if __name__ == "__main__":
+    from tests.runner import run_tests
+    run_tests(globals(), "PLANNER")

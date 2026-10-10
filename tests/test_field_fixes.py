@@ -1,15 +1,14 @@
-"""Tests for the mission controller's fixes for flying real drones.
+"""Mission-controller fixes for flying real drones.
 
-Run with:  python -m tests.test_field_fixes      (or: python -m pytest tests/test_field_fixes.py)
-Uses assert, so a failure stops the run.
+Run with:  python -m tests.test_field_fixes   (or: python -m pytest tests)
 """
 import numpy as np
 
 from env.forest_env import ForestEnv
 from env.grid import FREE, OBSTACLE
-from planning.mission_controller import (DOCKED, EXPLORE, LANDED, RETURN, TRACK, MissionConfig,
-                                         MissionController, field_at)
-from planning.safety import SafetySupervisor, cell_of, route_cells, safe_distance_field
+from planning.mission import DOCKED, EXPLORE, LANDED, RETURN, TRACK, MissionConfig, MissionController
+from planning.routing import cell_of, field_at, route_cells, safe_distance_field
+from planning.safety import SafetySupervisor
 from planning.surveillance import Event
 
 
@@ -270,8 +269,5 @@ def test_field_at_without_error_is_the_plain_lookup():
 
 
 if __name__ == "__main__":
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    for t in tests:
-        t()
-        print(f"PASS  {t.__name__}")
-    print(f"\nALL {len(tests)} FIELD-FIX TESTS PASSED")
+    from tests.runner import run_tests
+    run_tests(globals(), "FIELD-FIX")

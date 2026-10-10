@@ -1,92 +1,84 @@
 import numpy as np
 
-FREE     = 0   # navigable empty terrain
-OBSTACLE = 1   # dense tree cluster — UAVs cannot enter
-TARGET   = 2   # surveillance point (wildlife / POI)
-BASE     = 3   # UAV starting station
+FREE = 0        # open ground
+OBSTACLE = 1    # tree cluster: UAVs cannot enter
+TARGET = 2      # point of interest
+BASE = 3        # base station
 
 
-# GRID CREATION 
-
+# ----------------------------------------------------------------- map
 def create_empty_grid(size):
-    
     return np.zeros((size, size), dtype=np.int32)
 
 
 def place_obstacles(grid, n_clusters=8, cluster_size=3, density=0.6, seed=None):
-    
+    """Random tree clusters, kept away from the map edge."""
     if seed is not None:
         np.random.seed(seed)
-
     size = grid.shape[0]
-    margin = 2   # keep edges clear
-
+    margin = 2
     for _ in range(n_clusters):
-        # Random cluster centre — away from edges
         cx = np.random.randint(margin + cluster_size, size - margin - cluster_size)
         cy = np.random.randint(margin + cluster_size, size - margin - cluster_size)
-
-        # Fill neighbourhood
         for dx in range(-cluster_size, cluster_size + 1):
             for dy in range(-cluster_size, cluster_size + 1):
                 if np.random.random() < density:
                     nx, ny = cx + dx, cy + dy
                     if 0 <= nx < size and 0 <= ny < size:
                         grid[nx, ny] = OBSTACLE
-
     return grid
 
+
 def place_targets(grid, n_targets=10, seed=None):
-   
+    """Targets on random free cells; returns (grid, [(x, y), ...])."""
     if seed is not None:
         np.random.seed(seed)
-
     size = grid.shape[0]
-    target_positions = []
-
-    placed = 0
-    max_attempts = n_targets * 100   # avoid infinite loop
-
-    for _ in range(max_attempts):
-        if placed >= n_targets:
+    positions = []
+    for _ in range(n_targets * 100):
+        if len(positions) >= n_targets:
             break
         x = np.random.randint(0, size)
         y = np.random.randint(0, size)
         if grid[x, y] == FREE:
             grid[x, y] = TARGET
-            target_positions.append((x, y))
-            placed += 1
-
-    return grid, target_positions
+            positions.append((x, y))
+    return grid, positions
 
 
 def place_base(grid, position=(1, 1)):
-    x, y = position
-    grid[x, y] = BASE
+    grid[position] = BASE
     return grid
 
 
-# COVERAGE MAP 
-
+# ------------------------------------------------------------ coverage
 def create_coverage_map(size):
     return np.zeros((size, size), dtype=bool)
 
 
-def reset_coverage_map(coverage_map):
-    coverage_map[:] = False
-    return coverage_map
-
-
 def mark_visited(coverage_map, x, y):
+    """Mark one cell; True if it was new."""
     is_new = not coverage_map[x, y]
     coverage_map[x, y] = True
     return is_new
 
 
-# SENSOR FOOTPRINT
+def navigable_mask(grid):
+    return (grid == FREE) | (grid == TARGET)
 
+
+def get_coverage_rate(coverage_map, grid):
+    """Share of navigable cells covered."""
+    navigable = navigable_mask(grid)
+    total = np.sum(navigable)
+    if total == 0:
+        return 0.0
+    return float(np.sum(coverage_map & navigable)) / float(total)
+
+
+# ------------------------------------------------------ sensor footprint
 def make_footprint_mask(radius, shape="circle"):
-    """Boolean (2r+1, 2r+1) sensor footprint, built once at env init."""
+    """Boolean (2r+1, 2r+1) sensor footprint."""
     d = np.arange(-radius, radius + 1)
     dx, dy = np.meshgrid(d, d, indexing="ij")
     if shape == "circle":
@@ -95,31 +87,20 @@ def make_footprint_mask(radius, shape="circle"):
 
 
 def footprint_cells(size, cx, cy, mask, radius):
-    """(size, size) bool array, True on cells inside the footprint centred at
-    (cx, cy). Read-only — writes nothing."""
+    """(size, size) bool map of the footprint centred on cell (cx, cy)."""
     out = np.zeros((size, size), dtype=bool)
     x0, x1 = max(0, cx - radius), min(size, cx + radius + 1)
     y0, y1 = max(0, cy - radius), min(size, cy + radius + 1)
     out[x0:x1, y0:y1] = mask[
-        x0 - (cx - radius) : mask.shape[0] - ((cx + radius + 1) - x1),
-        y0 - (cy - radius) : mask.shape[1] - ((cy + radius + 1) - y1),
+        x0 - (cx - radius): mask.shape[0] - ((cx + radius + 1) - x1),
+        y0 - (cy - radius): mask.shape[1] - ((cy + radius + 1) - y1),
     ]
     return out
 
 
-# GRID UTILITIES
-
-def get_coverage_rate(coverage_map, grid):
-    
-    navigable = np.sum((grid == FREE) | (grid == TARGET))
-    if navigable == 0:
-        return 0.0
-    explored = np.sum(coverage_map & ((grid == FREE) | (grid == TARGET)))
-    return float(explored) / float(navigable)
-
-
+# ------------------------------------------------------------- helpers
 def is_valid_position(grid, x, y):
-    
+    """Inside the map and not an obstacle."""
     size = grid.shape[0]
     if x < 0 or x >= size or y < 0 or y >= size:
         return False
@@ -127,25 +108,19 @@ def is_valid_position(grid, x, y):
 
 
 def print_grid(grid, coverage_map=None, agent_positions=None):
+    """ASCII map: D drone, * covered, # tree, T target, B base."""
     size = grid.shape[0]
-    symbols = {FREE: '.', OBSTACLE: '#', TARGET: 'T', BASE: 'B'}
-
-    # Build set of agent positions for fast lookup
-    agent_set = set()
-    if agent_positions:
-        for pos in agent_positions:
-            agent_set.add((int(pos[0]), int(pos[1])))
-
+    symbols = {FREE: ".", OBSTACLE: "#", TARGET: "T", BASE: "B"}
+    agents = {(int(p[0]), int(p[1])) for p in agent_positions} if agent_positions else set()
     print("+" + "-" * size + "+")
     for x in range(size):
         row = "|"
         for y in range(size):
-            if (x, y) in agent_set:
+            if (x, y) in agents:
                 row += "D"
             elif coverage_map is not None and coverage_map[x, y]:
                 row += "*"
             else:
                 row += symbols.get(grid[x, y], "?")
-        row += "|"
-        print(row)
+        print(row + "|")
     print("+" + "-" * size + "+")

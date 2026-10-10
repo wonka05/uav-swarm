@@ -1,37 +1,18 @@
-"""Compare mission strategies on the same evaluation maps.
+"""Mission strategies compared on the same evaluation maps.
 
 Usage:
-    python -m evaluation.evaluate_mission [--checkpoint PATH] [--episodes N] [--arms 1,2,3,4,5,6]
-        [--coverage-target 1.0] [--launch-gap 40] [--recharge-steps 100] [--reserve 10]
-        [--mission-steps 1500] [--stall 10] [--smart-stall 3] [--position-noise 0.0]
+    python -m evaluation.evaluate_mission [--arms 1,2,3,4,5,6] [--episodes N] [--coverage-target 1.0]
+        [--position-noise 0.1] [--output results.json]
 
-Six arms, all on the same maps (the global NumPy state is saved before every
-map of evaluation/evaluate.py's run and restored for each arm):
+Arms, each adding a layer to the one before:
+  1 policy only (same as evaluation/evaluate.py)   2 + coverage override
+  3 + return home and recharge                     4 + staggered launch
+  5 + safety layer                                 6 + smart planner (the final system)
+  7 patrol with spare batteries                    8 patrol without spare batteries
 
-  1. Policy only              - reproduces evaluation/evaluate.py exactly
-  2. + coverage override      - stalled UAVs are routed to uncovered ground
-  3. + return-home, recharge  - all UAVs launch together
-  4. + staggered launch       - the full mission controller
-  5. + safety layer           - arm 4 flown as if mistakes were fatal: every action
-                                checked against obstacles, the map edge and the
-                                other UAVs; corner-free routes; own landing pads;
-                                20 % battery reserve; optional position error
-  6. + smarter planner        - arm 5, but a stalled UAV is sent to the spot that
-                                reveals most uncovered ground per distance flown,
-                                kept by the planner until it reaches fresh ground,
-                                and taken over after 3 unproductive steps, not 10
-
-A mission ends when coverage reaches the target (default: the environment's
-coverage_threshold, 0.95; --coverage-target 1.0 asks for every cell). Arms 1-2
-keep the 500-step limit; arms 3-6 run up to --mission-steps. The maps are
-fixed by replaying evaluate.py first whenever arm 1 is not run at the default
-target. Nothing is trained; --output saves every map's results as JSON for
-evaluation/build_report.py.
-
-Besides coverage, every arm reports what would hurt real drones: obstacle hits
-(total blocked moves, not the final-step snapshot), squeezes between touching
-obstacles, moves the environment clamped at the map edge, and near misses
-between airborne UAVs.
+Every arm runs on the maps evaluate.py uses: the global RNG state before each map is
+saved once and restored for every arm. Besides coverage, each arm counts what would hurt
+real drones: obstacle hits, corner squeezes, map-edge clamps and near misses.
 """
 from __future__ import annotations
 
@@ -41,76 +22,94 @@ import os
 import time
 
 import numpy as np
-import yaml
 
-from env.forest_env import ForestEnv
+from agents.maddpg import TRAINED_MODEL, MADDPG
+from env.forest_env import DEFAULT_CONFIG, ForestEnv
 from env.grid import OBSTACLE
-from agents.maddpg import MADDPG
-from planning.mission_controller import MissionConfig, MissionController
+from planning.mission import MissionConfig, MissionController
 
-CONFIG_PATH = "configs/default.yaml"
-DEFAULT_CHECKPOINT = "checkpoints/final1500/maddpg_best.pt"
 NEAR_MISS = 1.0          # airborne UAVs closer than this many cells count as a near miss
 
 
-def run_episode(env, agent, ctrl, max_steps):
-    env.reset()
-    obs = ctrl.reset(env)
-    field_counts = []
-    hits = squeezes = clamps = near = 0
-    over_fire = over_known_fire = 0                  # airborne UAV-steps above burning ground
-    watch_gap, intruder_gap = np.inf, np.inf         # closest a UAV came to a fire's edge / an intruder it knew of
-    size = env.grid_size
-    info = {}
-    for t in range(1, max_steps + 1):
-        actions = ctrl.actions(env, agent.select_actions(obs, training=False))
+class FlightLog:
+    """Counts, over one episode, what would hurt real drones."""
+
+    def __init__(self):
+        self.hits = self.squeezes = self.clamps = self.near = 0
+        self.over_fire = self.over_known_fire = 0    # airborne UAV-steps above burning ground
+        self.watch_gap = self.intruder_gap = np.inf  # closest to a confirmed fire's edge / a known intruder
+        self.in_field = []
+
+    def before_step(self, env, actions):
+        """Positions before the move; counts moves the environment will clamp at the map edge."""
         before = np.array([u.pos for u in env.uavs], dtype=np.float32)
         flying = [u.is_active for u in env.uavs]
-        for i in range(env.n_agents):               # moves the environment will clamp at the map edge
+        for i in range(env.n_agents):
             if flying[i]:
                 v = np.clip(np.asarray(actions[i], dtype=np.float32), -1.0, 1.0)
                 v = v / max(1.0, float(np.linalg.norm(v)))
                 end = before[i] + v
-                clamps += int(end.min() < 0.0 or end.max() > size - 1.0)
-        _, _, _, info = env.step(actions)
+                self.clamps += int(end.min() < 0.0 or end.max() > env.grid_size - 1.0)
+        return before, flying
+
+    def after_move(self, env, before, flying):
+        """Blocked moves and diagonal squeezes between two touching obstacles."""
         for i, u in enumerate(env.uavs):
             if not flying[i]:
                 continue
-            hits += int(u.collided)                  # every blocked move is a hit, not just the last
-            a = (int(before[i][0]), int(before[i][1]))
-            b = u.grid_pos
+            self.hits += int(u.collided)
+            a, b = (int(before[i][0]), int(before[i][1])), u.grid_pos
             if abs(a[0] - b[0]) == 1 and abs(a[1] - b[1]) == 1 and \
                     env.grid[a[0], b[1]] == OBSTACLE and env.grid[b[0], a[1]] == OBSTACLE:
-                squeezes += 1
-        obs = ctrl.after_step(env, t)
+                self.squeezes += 1
+
+    def after_control(self, env, ctrl, t):
+        """Near misses, UAVs in the air, and distances to fires and intruders."""
         airborne = [u.pos for u in env.uavs if u.is_active]
         for i in range(len(airborne)):
             for j in range(i + 1, len(airborne)):
-                near += int(np.linalg.norm(airborne[i] - airborne[j]) < NEAR_MISS)
-        field_counts.append(ctrl.in_field())
-        if ctrl.events is not None:
-            for u in env.uavs:
-                if not u.is_active:
-                    continue
-                for e in ctrl.events.events:
-                    gap = float(np.linalg.norm(u.pos - e.pos)) - e.radius
-                    if e.kind == "fire":
-                        if gap <= 0:
-                            over_fire += 1
-                            over_known_fire += int(e.detected is not None and e.detected < t)
-                        if e.confirmed is not None:
-                            watch_gap = min(watch_gap, gap)
-                    elif e.detected is not None:
-                        intruder_gap = min(intruder_gap, gap)
-        # patrol missions have no finish line: they run until max_steps. With position error a
-        # mission ends when the coverage the controller believes it has reaches the target
+                self.near += int(np.linalg.norm(airborne[i] - airborne[j]) < NEAR_MISS)
+        self.in_field.append(ctrl.in_field())
+        if ctrl.events is None:
+            return
+        for u in env.uavs:
+            if not u.is_active:
+                continue
+            for e in ctrl.events.events:
+                gap = float(np.linalg.norm(u.pos - e.pos)) - e.radius
+                if e.kind == "fire":
+                    if gap <= 0:
+                        self.over_fire += 1
+                        self.over_known_fire += int(e.detected is not None and e.detected < t)
+                    if e.confirmed is not None:
+                        self.watch_gap = min(self.watch_gap, gap)
+                elif e.detected is not None:
+                    self.intruder_gap = min(self.intruder_gap, gap)
+
+    def fire_stats(self):
+        return {"over_fire": self.over_fire, "over_known_fire": self.over_known_fire,
+                "watch_gap_min": None if np.isinf(self.watch_gap) else self.watch_gap,
+                "intruder_gap_min": None if np.isinf(self.intruder_gap) else self.intruder_gap}
+
+
+def run_episode(env, agent, ctrl, max_steps):
+    """One mission; returns its results as a flat dict."""
+    env.reset()
+    obs = ctrl.reset(env)
+    log = FlightLog()
+    info = {}
+    for t in range(1, max_steps + 1):
+        actions = ctrl.actions(env, agent.select_actions(obs, training=False))
+        before, flying = log.before_step(env, actions)
+        _, _, _, info = env.step(actions)
+        log.after_move(env, before, flying)
+        obs = ctrl.after_step(env, t)
+        log.after_control(env, ctrl, t)
+        # a patrol has no finish line; with position error the believed coverage decides
         if (not ctrl.cfg.patrol and ctrl.coverage_estimate(env, info) >= env.coverage_threshold) or ctrl.finished():
             break
-    field = np.array(field_counts)
-    fire = {} if ctrl.events is None else {
-        "over_fire": over_fire, "over_known_fire": over_known_fire,
-        "watch_gap_min": None if np.isinf(watch_gap) else watch_gap,
-        "intruder_gap_min": None if np.isinf(intruder_gap) else intruder_gap}
+    field = np.array(log.in_field)
+    fire = {} if ctrl.events is None else log.fire_stats()
     return ctrl.extra_stats() | ctrl.field_stats() | fire | {
         "coverage": info["coverage_rate"],
         "coverage_believed": ctrl.coverage_estimate(env, info),
@@ -124,16 +123,61 @@ def run_episode(env, agent, ctrl, max_steps):
         "mean_field": float(field.mean()),
         "returns": ctrl.returns,
         "controlled": ctrl.controlled_steps / max(ctrl.flying_steps, 1),
-        "hits": hits,
-        "squeezes": squeezes,
-        "clamps": clamps,
-        "near_misses": near,
+        "hits": log.hits,
+        "squeezes": log.squeezes,
+        "clamps": log.clamps,
+        "near_misses": log.near,
         "interventions": ctrl.interventions(),
     }
 
 
+def mission_arms(args, env, default_target):
+    """{arm number: (name, MissionConfig, step limit)}."""
+    common = dict(recharge_steps=args.recharge_steps, reserve_steps=args.reserve, stall_limit=args.stall)
+    smart = dict(safety=True, position_noise=args.position_noise, gain_targets=True, chain_targets=True,
+                 **{**common, "stall_limit": args.smart_stall})
+    patrol = dict(launch_gap=0, patrol=True, events=True, **smart)
+    noise = f"position error {args.position_noise:g} cells"
+    return {
+        1: ("1. POLICY ONLY" + (" (same as evaluate.py)" if default_target else ""), policy_only(args),
+            env.max_steps),
+        2: ("2. + COVERAGE OVERRIDE",
+            MissionConfig(coverage_override=True, return_home=False, recharge=False, launch_gap=0, **common),
+            env.max_steps),
+        3: ("3. + RETURN-HOME AND RECHARGE, launched together",
+            MissionConfig(launch_gap=0, **common), args.mission_steps),
+        4: (f"4. + STAGGERED LAUNCH every {args.launch_gap} steps (full mission controller)",
+            MissionConfig(launch_gap=args.launch_gap, **common), args.mission_steps),
+        5: (f"5. + SAFETY LAYER ({noise})",
+            MissionConfig(launch_gap=args.launch_gap, safety=True, position_noise=args.position_noise, **common),
+            args.mission_steps),
+        6: (f"6. + SMARTER PLANNER ({noise})", MissionConfig(launch_gap=args.launch_gap, **smart),
+            args.mission_steps),
+        7: (f"7. PERSISTENT SURVEILLANCE with {args.spare_packs} spare batteries, {args.patrol_steps} steps",
+            MissionConfig(spare_packs=args.spare_packs, **patrol), args.patrol_steps),
+        8: (f"8. PERSISTENT SURVEILLANCE without spare batteries, {args.patrol_steps} steps",
+            MissionConfig(spare_packs=0, **patrol), args.patrol_steps),
+    }
+
+
+def policy_only(args):
+    return MissionConfig(coverage_override=False, return_home=False, recharge=False, launch_gap=0,
+                         recharge_steps=args.recharge_steps, reserve_steps=args.reserve, stall_limit=args.stall)
+
+
+def pin_maps(env, agent, n, args):
+    """Replay evaluate.py, saving the global RNG state before every map."""
+    print("Fixing the evaluation maps by replaying evaluate.py ...", flush=True)
+    replay = MissionController(policy_only(args), env.grid_size, env.n_agents)
+    states = []
+    for _ in range(n):
+        states.append(np.random.get_state())
+        run_episode(env, agent, replay, env.max_steps)
+    return states
+
+
 def summarise(name, res):
-    g = lambda k: np.array([r[k] for r in res], dtype=float)
+    g = lambda k: np.array([r[k] for r in res], dtype=float)  # noqa: E731
     cov, n = g("coverage"), len(res)
     print(f"\n===== {name} =====")
     print(f"Mean Coverage:        {cov.mean():.1%}   (median {np.median(cov):.1%}, worst {cov.min():.1%})")
@@ -147,7 +191,8 @@ def summarise(name, res):
     print(f"UAVs flying:          mean {g('mean_field').mean():.2f}, lowest {g('min_field').mean():.2f} on average")
     print(f"Returns to base:      {g('returns').mean():.1f} per mission")
     print(f"Planner-flown steps:  {g('controlled').mean():.1%}")
-    print(f"Obstacle hits:        {g('hits').mean():.1f} per mission   (missions with any: {int((g('hits') > 0).sum())}/{n})")
+    print(f"Obstacle hits:        {g('hits').mean():.1f} per mission   "
+          f"(missions with any: {int((g('hits') > 0).sum())}/{n})")
     print(f"Corner squeezes:      {g('squeezes').mean():.1f} per mission")
     print(f"Map-edge clamps:      {g('clamps').mean():.1f} per mission")
     print(f"Near misses:          {g('near_misses').mean():.1f} per mission   "
@@ -161,31 +206,48 @@ def summarise(name, res):
               f"longest at the end {g('max_age_end').mean():.0f} steps")
         print(f"Battery swaps:        {g('swaps').mean():.1f} per mission")
     if "events" in res[0]:
-        print(f"Events:               {g('events').mean():.1f} per mission, detected "
-              f"{g('events_detected').sum() / max(g('events').sum(), 1):.1%}")
-        print(f"Time to detect:       mean {np.nanmean(g('detect_delay_mean')):.0f} steps, "
-              f"worst {np.nanmax(g('detect_delay_max')):.0f} steps")
-        print(f"Time to confirm:      mean {np.nanmean(g('confirm_delay_mean')):.0f} steps after detection")
-        print(f"Above burning ground: {g('over_fire').mean():.1f} UAV-steps per mission "
-              f"({g('over_known_fire').mean():.1f} after the fire was detected)")
-        gaps = np.array([r['watch_gap_min'] for r in res if r.get('watch_gap_min') is not None], dtype=float)
-        igaps = np.array([r['intruder_gap_min'] for r in res if r.get('intruder_gap_min') is not None], dtype=float)
-        if gaps.size:
-            print(f"Closest to a fire's edge after confirming: {gaps.min():.1f} cells (mean of missions {gaps.mean():.1f})")
-        if igaps.size:
-            print(f"Closest to a known intruder: {igaps.min():.1f} cells (mean of missions {igaps.mean():.1f})")
-        print(f"Incidents abandoned before confirming: {g('abandoned').sum():.0f}, hand-overs: {g('handovers').sum():.0f}, "
-              f"steps escaping a fire zone: {g('escape_steps').mean():.1f} per mission")
+        summarise_events(res, g)
     if "boosts" in res[0]:
         print(f"Stuck returns:        right of way {g('boosts').sum():.0f}, pad swaps {g('pad_switches').sum():.0f}, "
               f"emergency landings {g('emergency_landings').sum():.0f} (all missions)")
-    if (g('coverage_believed') != cov).any():
+    if (g("coverage_believed") != cov).any():
         print(f"Believed coverage:    {g('coverage_believed').mean():.1%} (true {cov.mean():.1%})")
 
 
-def main():
+def summarise_events(res, g):
+    print(f"Events:               {g('events').mean():.1f} per mission, detected "
+          f"{g('events_detected').sum() / max(g('events').sum(), 1):.1%}")
+    print(f"Time to detect:       mean {np.nanmean(g('detect_delay_mean')):.0f} steps, "
+          f"worst {np.nanmax(g('detect_delay_max')):.0f} steps")
+    print(f"Time to confirm:      mean {np.nanmean(g('confirm_delay_mean')):.0f} steps after detection")
+    print(f"Above burning ground: {g('over_fire').mean():.1f} UAV-steps per mission "
+          f"({g('over_known_fire').mean():.1f} after the fire was detected)")
+    gaps = np.array([r["watch_gap_min"] for r in res if r.get("watch_gap_min") is not None], dtype=float)
+    igaps = np.array([r["intruder_gap_min"] for r in res if r.get("intruder_gap_min") is not None], dtype=float)
+    if gaps.size:
+        print(f"Closest to a fire's edge after confirming: {gaps.min():.1f} cells (mean of missions {gaps.mean():.1f})")
+    if igaps.size:
+        print(f"Closest to a known intruder: {igaps.min():.1f} cells (mean of missions {igaps.mean():.1f})")
+    print(f"Incidents abandoned before confirming: {g('abandoned').sum():.0f}, hand-overs: {g('handovers').sum():.0f}, "
+          f"steps escaping a fire zone: {g('escape_steps').mean():.1f} per mission")
+
+
+def to_json(v):
+    """NumPy scalars and NaN as plain JSON values."""
+    v = v.item() if isinstance(v, np.generic) else v
+    return None if isinstance(v, float) and np.isnan(v) else v
+
+
+def save_results(path, saved):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(saved, f, indent=1)
+    print(f"Saved {path}", flush=True)
+
+
+def parse_args():
     p = argparse.ArgumentParser(description="Mission strategies on the same evaluation maps.")
-    p.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT)
+    p.add_argument("--checkpoint", default=TRAINED_MODEL)
     p.add_argument("--episodes", type=int, default=None, help="default: evaluation.n_test_episodes")
     p.add_argument("--arms", default="1,2,3,4,5,6", help="comma-separated arms to run")
     p.add_argument("--launch-gap", type=int, default=40)
@@ -196,68 +258,31 @@ def main():
     p.add_argument("--mission-steps", type=int, default=1500)
     p.add_argument("--stall", type=int, default=10)
     p.add_argument("--position-noise", type=float, default=0.0,
-                   help="std of the simulated position error for arms 5-6, in cells")
+                   help="std of the simulated position error for arms 5-8, in cells")
     p.add_argument("--smart-stall", type=int, default=3,
                    help="arms 6-8: unproductive steps before the planner takes over")
     p.add_argument("--patrol-steps", type=int, default=1500, help="arms 7-8: length of a patrol mission")
     p.add_argument("--spare-packs", type=int, default=3, help="arm 7: charged spare batteries at the base")
     p.add_argument("--output", help="also save every map's results as JSON (read by evaluation/build_report.py)")
-    args = p.parse_args()
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
     selected = sorted({int(a) for a in args.arms.split(",")})
-
-    with open(CONFIG_PATH) as f:
-        cfg = yaml.safe_load(f)
-    env = ForestEnv(CONFIG_PATH)
-    agent = MADDPG(cfg, obs_dim=env.obs_dim, action_dim=2)   # seeds the global RNG, as in evaluate.py
-    agent.load(args.checkpoint)
-    agent.actor.eval()
-    n = args.episodes or cfg["evaluation"]["n_test_episodes"]
-
+    env = ForestEnv(DEFAULT_CONFIG)
+    agent = MADDPG.from_checkpoint(args.checkpoint, env.cfg, env.obs_dim)   # seeds the global RNG
+    n = args.episodes or env.cfg["evaluation"]["n_test_episodes"]
     target = env.coverage_threshold if args.coverage_target is None else args.coverage_target
     default_target = target == env.coverage_threshold
-
-    common = dict(recharge_steps=args.recharge_steps, reserve_steps=args.reserve, stall_limit=args.stall)
-    policy_only = MissionConfig(coverage_override=False, return_home=False, recharge=False, launch_gap=0, **common)
-    arms = {
-        1: ("1. POLICY ONLY" + (" (same as evaluate.py)" if default_target else ""), policy_only, env.max_steps),
-        2: ("2. + COVERAGE OVERRIDE",
-            MissionConfig(coverage_override=True, return_home=False, recharge=False, launch_gap=0, **common),
-            env.max_steps),
-        3: ("3. + RETURN-HOME AND RECHARGE, launched together",
-            MissionConfig(launch_gap=0, **common), args.mission_steps),
-        4: (f"4. + STAGGERED LAUNCH every {args.launch_gap} steps (full mission controller)",
-            MissionConfig(launch_gap=args.launch_gap, **common), args.mission_steps),
-        5: (f"5. + SAFETY LAYER (position error {args.position_noise:g} cells)",
-            MissionConfig(launch_gap=args.launch_gap, safety=True, position_noise=args.position_noise, **common),
-            args.mission_steps),
-        6: (f"6. + SMARTER PLANNER (position error {args.position_noise:g} cells)",
-            MissionConfig(launch_gap=args.launch_gap, safety=True, position_noise=args.position_noise,
-                          gain_targets=True, chain_targets=True,
-                          **{**common, "stall_limit": args.smart_stall}),
-            args.mission_steps),
-        7: (f"7. PERSISTENT SURVEILLANCE with {args.spare_packs} spare batteries, {args.patrol_steps} steps",
-            MissionConfig(launch_gap=0, safety=True, position_noise=args.position_noise,
-                          gain_targets=True, chain_targets=True, patrol=True, events=True,
-                          spare_packs=args.spare_packs, **{**common, "stall_limit": args.smart_stall}),
-            args.patrol_steps),
-        8: (f"8. PERSISTENT SURVEILLANCE without spare batteries, {args.patrol_steps} steps",
-            MissionConfig(launch_gap=0, safety=True, position_noise=args.position_noise,
-                          gain_targets=True, chain_targets=True, patrol=True, events=True,
-                          spare_packs=0, **{**common, "stall_limit": args.smart_stall}),
-            args.patrol_steps),
-    }
+    arms = mission_arms(args, env, default_target)
 
     print(f"Evaluating: {args.checkpoint} | {n} maps | arms {selected} | coverage target {target:.0%} | "
           f"recharge {args.recharge_steps} steps | mission limit {args.mission_steps} steps", flush=True)
     states = []
     if not default_target or selected[0] != 1:
-        # fix the maps first: replay evaluate.py, saving the RNG state before every map
-        print("Fixing the evaluation maps by replaying evaluate.py ...", flush=True)
-        replay = MissionController(policy_only, env.grid_size, env.n_agents)
-        for ep in range(n):
-            states.append(np.random.get_state())
-            run_episode(env, agent, replay, env.max_steps)
-        env.coverage_threshold = target              # in memory only; the config is untouched
+        states = pin_maps(env, agent, n, args)
+        env.coverage_threshold = target              # in memory only
     saved = {"checkpoint": args.checkpoint, "maps": n, "coverage_target": target,
              "settings": {k: v for k, v in vars(args).items() if k not in ("output", "arms", "checkpoint")},
              "arms": {}}
@@ -275,18 +300,9 @@ def main():
                 print(f"  [{a}] {ep + 1}/{n} maps", flush=True)
         print(f"\n[{name}] finished in {time.time() - t0:.0f}s", flush=True)
         summarise(name, res)
-        if args.output:                              # rewritten after every arm, so a long run keeps what it has
+        if args.output:                              # rewritten after every arm
             saved["arms"][str(a)] = {"name": name, "results": [{k: to_json(v) for k, v in r.items()} for r in res]}
-            os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
-            with open(args.output, "w") as f:
-                json.dump(saved, f, indent=1)
-            print(f"Saved {args.output}", flush=True)
-
-
-def to_json(v):
-    """NumPy scalars and NaN as plain JSON values."""
-    v = v.item() if isinstance(v, np.generic) else v
-    return None if isinstance(v, float) and np.isnan(v) else v
+            save_results(args.output, saved)
 
 
 if __name__ == "__main__":
