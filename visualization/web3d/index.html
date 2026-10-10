@@ -344,7 +344,7 @@ const fireRadius = (e, t) => e.radius[clamp(t - e.spawn, 0, e.radius.length - 1)
 const known = (t, x) => x >= 0 && x <= t;
 const goalOf = (t, u) => (ep.raw.goal ? ep.raw.goal[Math.min(t + 1, ep.T - 1) * ep.n + u] : -1);
 
-// planned routes: the corner-free shortest-path field the planner follows (as planning/safety.py)
+// planned routes: the corner-free shortest-path field the planner follows (as planning/routing.py)
 const SQ2 = Math.SQRT2;
 const NB = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, SQ2], [1, -1, SQ2], [-1, 1, SQ2], [-1, -1, SQ2]];
 function distanceField(ep, src) {

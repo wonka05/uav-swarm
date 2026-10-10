@@ -39,7 +39,7 @@ flowchart LR
     CFG["configs/default.yaml"] --> TR["training/train.py"]
     TR --> ENV["ForestEnv<br/>env/"]
     TR --> AG["MADDPG<br/>agents/"]
-    VOR["VoronoiPlanner<br/>planning/"] -- "region centres, each reset" --> ENV
+    VOR["VoronoiPlanner<br/>planning/"] -- "region centres" --> ENV
     ENV -- "5 observations × 179 values" --> AG
     AG -- "5 actions (vx, vy)" --> ENV
     ENV -- "rewards, next observations, done" --> BUF["ReplayBuffer"]
@@ -118,8 +118,8 @@ r_i  ←  0.7 · r_i  +  0.3 · mean( r_j  for every UAV j within 10 cells of UA
 ### Voronoi planning — `planning/`
 
 `VoronoiPlanner` ([planning/voronoi_planner.py](planning/voronoi_planner.py)) splits the grid into one
-region per UAV by assigning every cell to its nearest seed point, using SciPy's `KDTree`. At every
-`reset()`, `ForestEnv` builds a planner from five **fixed** seeds — (5, 5), (5, 44), (44, 5), (44, 44)
+region per UAV by assigning every cell to its nearest seed point, using SciPy's `KDTree`. When it is
+created, `ForestEnv` builds a planner from five **fixed** seeds — (5, 5), (5, 44), (44, 5), (44, 44)
 and (25, 25), roughly the four corners and the centre — and puts each region's centre into that UAV's
 observation.
 
@@ -173,9 +173,10 @@ For each of the 1,500 episodes:
    the history CSV.
 
 A checkpoint stores the weights of the actor, the five critics and all their target networks, plus the
-step counter and loss histories. Optimiser state is not saved. Load one with `MADDPG.load(path)`.
+step counter and loss histories. Optimiser state is not saved. Load one with `MADDPG.load(path)`, or build a ready-to-run agent with
+`MADDPG.from_checkpoint(path, cfg, obs_dim)`.
 
-### Mission controller — `planning/mission_controller.py`
+### Mission controller — `planning/mission/`
 
 The trained policy only knows how to explore. The mission controller runs around it at run time —
 it changes neither the environment nor the trained networks, and training does not use it. Every
@@ -203,7 +204,7 @@ incident response). Results with and without each layer can be produced with
 
 ```text
 .
-├── main.py                     # CLI entry point (only --mode train is implemented)
+├── main.py                     # CLI entry point: python main.py --mode train
 ├── requirements.txt
 ├── configs/
 │   └── default.yaml            # environment, reward, MADDPG and training settings
@@ -221,9 +222,15 @@ incident response). Results with and without each layer can be produced with
 │   └── train.py                # training loop, checkpoints, TensorBoard and CSV logging
 ├── planning/
 │   ├── voronoi_planner.py      # Voronoi partition with SciPy KDTree
-│   ├── mission_controller.py   # mission layer around the policy: launch, return home, recharge, planner
-│   ├── safety.py               # safety layer: obstacle, map-edge and spacing checks, safe routes
-│   └── surveillance.py         # persistent patrol: fires and intruders that appear during a mission
+│   ├── routing.py              # shortest obstacle-free paths and following them
+│   ├── safety.py               # safety layer: obstacle, map-edge and spacing checks
+│   ├── surveillance.py         # persistent patrol: fires and intruders that appear during a mission
+│   └── mission/                # mission layer around the policy
+│       ├── config.py           # MissionConfig and the UAV modes
+│       ├── controller.py       # MissionController: who flies each UAV, every step
+│       ├── coverage.py         # coverage planner for UAVs that stop finding new ground
+│       ├── homing.py           # return home, recharge, stuck-return fixes
+│       └── incidents.py        # patrol, fires and intruders, no-fly zones
 ├── evaluation/
 │   ├── evaluate.py             # 100-episode evaluation of the trained policy alone
 │   ├── evaluate_mission.py     # the policy with each mission layer, on the same 100 maps
@@ -234,13 +241,15 @@ incident response). Results with and without each layer can be produced with
 ├── visualization/
 │   ├── record_episode.py       # record one episode to .npz
 │   ├── pygame_dashboard.py     # interactive replay of a recorded episode
+│   ├── dashboard/              # the replay's code: data, map view, side panel, window
 │   ├── export_web.py           # export recordings for the 3D replay
 │   └── web3d/                  # 3D browser replay (three.js)
 └── tests/
     ├── test_env.py             # checks on the grid, UAV and environment
     ├── test_safety.py          # safety layer
     ├── test_field_fixes.py     # mission-controller fixes for flying real drones
-    └── test_voronoi_planner.py # Voronoi planner demonstration script
+    ├── test_voronoi_planner.py # Voronoi regions and reassignment
+    └── runner.py               # runs one test file without pytest
 ```
 
 The trained model, `checkpoints/final1500/maddpg_best.pt`, is in the repository. Other checkpoints
@@ -297,8 +306,8 @@ python -m training.train                                      # same as the firs
 Each episode prints its reward, coverage, detection, collisions and noise level. The full 1,500-episode
 run took about 8.1 hours on a CPU.
 
-`main.py` also accepts `--mode evaluate` and `--mode render`, but both only print a placeholder message,
-and `--checkpoint` is parsed but not used. Use the scripts below instead.
+`main.py` also accepts `--mode evaluate` and `--mode render`, but they only point to the scripts below,
+and `--checkpoint` is parsed but not used.
 
 ### Monitor training
 
@@ -438,7 +447,7 @@ Everything configurable lives in [configs/default.yaml](configs/default.yaml).
 | | `eval_frequency`, `eval_episodes` | 10, 10 | How often, and over how many episodes, the best model is re-checked |
 | | `checkpoint_dir`, `log_dir` | `checkpoints/final1500/`, `logs/final1500/` | Output folders (see the warning under [Train](#train)) |
 | | `init_from` | `null` | Checkpoint to warm-start from; a checkpoint with a shorter observation is zero-expanded |
-| | `log_frequency` | 50 | Read but not currently used |
+| | `log_frequency` | 50 | Not used |
 | `evaluation` | `n_test_episodes` | 100 | Episodes run by `evaluate.py` |
 | | `render` | `false` | Not currently used |
 
@@ -530,19 +539,19 @@ the forest; this is what limits the "seen recently" share.
 
 ## Tests and sanity checks
 
-| Command | What it does |
+```bash
+python -m pytest tests                     # all 42 tests
+python -m tests.test_env                   # or one file at a time
+```
+
+| File | What it checks |
 |---|---|
-| `python tests/test_env.py` | 63 checks on grid generation, UAV movement, battery and sensing, and `ForestEnv` reset, step, observation shape and termination |
-| `python -m tests.test_voronoi_planner` | Prints the region sizes, the overlap between regions and a reassignment example for the planner |
-| `python -m tests.test_safety` | Safety layer: corner-free routes, path checks, spacing between UAVs, return home under position error |
-| `python -m tests.test_field_fixes` | Mission-controller fixes: return home, stuck-return watchdog, incident response, fire no-fly zones |
+| `tests/test_env.py` | Grid generation, UAV movement, battery and sensing, and `ForestEnv` reset, step, observation size and termination |
+| `tests/test_voronoi_planner.py` | Voronoi regions cover the grid once; reassignment; the dynamic split among active UAVs |
+| `tests/test_safety.py` | Safety layer: corner-free routes, path checks, spacing between UAVs, return home under position error |
+| `tests/test_field_fixes.py` | Mission-controller fixes: return home, stuck-return watchdog, incident response, fire no-fly zones |
 
-Notes:
-
-- `tests/test_env.py` prints `PASS` / `FAIL` for each check instead of raising an error, so
-  `pytest tests/` reports success even when a check fails. Run the scripts directly and read the output.
-- The planner script has no assertions; it always ends with `ALL PLANNER TESTS PASSED`. It must be run
-  with `-m` — `python tests/test_voronoi_planner.py` fails with `ModuleNotFoundError`.
+Every test uses `assert`, so a failing check fails the run.
 - `test_safety.py` and `test_field_fixes.py` use `assert`, so a failure stops the run.
 
 ---
@@ -561,8 +570,8 @@ Notes:
   centre in the observation (see [Voronoi planning](#voronoi-planning--planning)).
 - **No coverage memory.** The observation does not say which cells are already covered, so a UAV cannot
   tell nearby explored ground from unexplored ground.
-- **Hard-coded paths.** `evaluation/evaluate.py` and `visualization/record_episode.py` load fixed
-  checkpoint paths; `main.py --mode evaluate` and `--mode render` are placeholders.
+- **Fixed model path.** `evaluation/evaluate.py` and `visualization/record_episode.py` always load
+  `checkpoints/final1500/maddpg_best.pt` (`TRAINED_MODEL` in `agents/maddpg.py`).
 - **Partial Gymnasium API.** `ForestEnv` subclasses `gymnasium.Env`, but `reset()` returns only the
   observations and `step()` returns `(observations, rewards, done, info)`, so standard Gymnasium
   wrappers will not work unchanged.
@@ -570,6 +579,3 @@ Notes:
   target.
 - **Stale moving targets in the terrain patch.** Moving targets update their positions in the target
   part of the observation, but the terrain patch keeps showing them at their starting cells.
-- **Outdated dimensions in some files.** The default arguments and docstrings in `agents/actor.py`,
-  `agents/critic.py` and `agents/replay_buffer.py` (172, 293, 1475) are out of date. The sizes actually used come from `ForestEnv.obs_dim`: 179 per UAV and 905 per
-  critic input.

@@ -3,124 +3,66 @@ from scipy.spatial import KDTree
 
 
 class VoronoiPlanner:
+    """Splits the grid into one region per agent: every cell goes to the nearest agent."""
 
     def __init__(self, grid_size, n_agents):
-
         self.grid_size = grid_size
-        self.n_agents  = n_agents
-
-        # Pre-compute all grid cell centre coordinates
-        # Shape: (grid_size * grid_size, 2)
-        xs, ys = np.meshgrid(
-            np.arange(grid_size),
-            np.arange(grid_size),
-            indexing="ij"
-        )
-        self.all_cells = np.stack(
-            [xs.flatten(), ys.flatten()], axis=1
-        ).astype(np.float32)
-        # all_cells[k] = (row, col) of the k-th grid cell
-
-        # Regions: list of sets, one per agent
-        # Each set contains (row, col) tuples assigned to that agent
+        self.n_agents = n_agents
+        xs, ys = np.meshgrid(np.arange(grid_size), np.arange(grid_size), indexing="ij")
+        self.all_cells = np.stack([xs.flatten(), ys.flatten()], axis=1).astype(np.float32)   # (row, col) per cell
         self.regions = [set() for _ in range(n_agents)]
-
-        # Binary masks: shape (n_agents, grid_size, grid_size)
-        self.masks = np.zeros(
-            (n_agents, grid_size, grid_size), dtype=np.float32
-        )
+        self.masks = np.zeros((n_agents, grid_size, grid_size), dtype=np.float32)
 
     def assign_regions(self, agent_positions):
-    
-        # Build KDTree from agent positions
-        tree = KDTree(agent_positions)
-
-        # Query nearest agent for every grid cell
-        _, indices = tree.query(self.all_cells)
-
-        # Reset regions and masks
+        """Static split around the given points; returns one set of cells per agent."""
+        _, nearest = KDTree(agent_positions).query(self.all_cells)
         self.regions = [set() for _ in range(self.n_agents)]
-        self.masks   = np.zeros(
-            (self.n_agents, self.grid_size, self.grid_size),
-            dtype=np.float32
-        )
-
-        # Assign each cell to its nearest agent
-        for cell_idx, agent_idx in enumerate(indices):
+        self.masks = np.zeros((self.n_agents, self.grid_size, self.grid_size), dtype=np.float32)
+        for cell_idx, agent_idx in enumerate(nearest):
             row, col = self.all_cells[cell_idx].astype(int)
             self.regions[agent_idx].add((row, col))
             self.masks[agent_idx, row, col] = 1.0
-
         return self.regions
 
     def get_region_mask(self, agent_idx):
-       
         return self.masks[agent_idx].copy()
 
     def get_unvisited_cells(self, agent_idx, coverage_map):
-     
-        unvisited = []
-        for (row, col) in self.regions[agent_idx]:
-            if not coverage_map[row, col]:
-                unvisited.append((row, col))
-        return unvisited
+        return [(row, col) for (row, col) in self.regions[agent_idx] if not coverage_map[row, col]]
 
-    def reassign(self, depleted_idx, active_indices, agent_positions,
-                 coverage_map):
-     
+    def reassign(self, depleted_idx, active_indices, agent_positions, coverage_map):
+        """Hand a depleted agent's unvisited cells to the nearest active agents."""
         if not active_indices:
             return self.regions
-
-        # Get unvisited cells of depleted agent
         unvisited = self.get_unvisited_cells(depleted_idx, coverage_map)
-
         if not unvisited:
             return self.regions
-
-        # KDTree of active agent positions only
-        active_positions = agent_positions[active_indices]
-        tree = KDTree(active_positions)
-
-        # Transfer each unvisited cell to nearest active agent
+        tree = KDTree(agent_positions[active_indices])
         for (row, col) in unvisited:
-            cell = np.array([[row, col]], dtype=np.float32)
-            _, nearest_local_idx = tree.query(cell)
-            nearest_agent_idx = active_indices[nearest_local_idx[0]]
-
-            # Move cell from depleted to nearest active
+            _, local = tree.query(np.array([[row, col]], dtype=np.float32))
+            new_owner = active_indices[local[0]]
             self.regions[depleted_idx].discard((row, col))
-            self.regions[nearest_agent_idx].add((row, col))
-            self.masks[depleted_idx, row, col]        = 0.0
-            self.masks[nearest_agent_idx, row, col]   = 1.0
-
+            self.regions[new_owner].add((row, col))
+            self.masks[depleted_idx, row, col] = 0.0
+            self.masks[new_owner, row, col] = 1.0
         return self.regions
 
     def owner_map(self, agent_positions, active):
-        """Dynamic partition over the CURRENT positions of the ACTIVE agents.
+        """(grid, grid) map of the nearest active agent to each cell centre; -1 when none is active.
 
-        Returns a (grid_size, grid_size) int array holding, for every cell,
-        the index of the nearest active agent (distance to the cell centre),
-        or -1 everywhere when no agent is active. Ties go to the lowest agent
-        index. Pure: regions/masks are left untouched and no random numbers
-        are drawn.
+        Ties go to the lowest index. Leaves regions and masks untouched.
         """
         owner_idx = np.flatnonzero(np.asarray(active, dtype=bool))
         if owner_idx.size == 0:
             return np.full((self.grid_size, self.grid_size), -1, dtype=np.int64)
-
-        positions = np.asarray(agent_positions, dtype=np.float32)[owner_idx]  # (k, 2)
-        centres   = self.all_cells + 0.5                                      # (G*G, 2)
-        dist_sq   = ((centres[:, None, :] - positions[None, :, :]) ** 2).sum(axis=2)
-        nearest   = owner_idx[np.argmin(dist_sq, axis=1)]
-        return nearest.reshape(self.grid_size, self.grid_size)
+        positions = np.asarray(agent_positions, dtype=np.float32)[owner_idx]
+        centres = self.all_cells + 0.5
+        dist_sq = ((centres[:, None, :] - positions[None, :, :]) ** 2).sum(axis=2)
+        return owner_idx[np.argmin(dist_sq, axis=1)].reshape(self.grid_size, self.grid_size)
 
     def get_region_sizes(self):
-      
         return [len(r) for r in self.regions]
 
     def __repr__(self):
-        sizes = self.get_region_sizes()
-        return (f"VoronoiPlanner("
-                f"grid={self.grid_size}x{self.grid_size}, "
-                f"agents={self.n_agents}, "
-                f"region_sizes={sizes})")
+        return (f"VoronoiPlanner(grid={self.grid_size}x{self.grid_size}, agents={self.n_agents}, "
+                f"region_sizes={self.get_region_sizes()})")

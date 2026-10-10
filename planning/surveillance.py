@@ -1,15 +1,8 @@
-"""Events for persistent surveillance: fires and intruders that appear during a mission.
+"""Fires and intruders that appear at random during a patrol.
 
-The environment's ten targets exist from the first step, and every UAV's
-observation already contains their positions. Events created here are
-different: they appear at random times and random places (anywhere in the
-forest, including ground already checked), fires grow and intruders move, and
-nothing about them is ever given to the trained policy. An event only counts
-as detected once it falls inside an active UAV's sensor footprint, so the
-time it takes to find it is an honest measure of the surveillance.
-
-Events use a private random generator, so the environment's map and
-target-motion random stream is untouched.
+Unlike the environment's targets they are never shown to the policy: an event counts as
+detected only once it is inside a flying UAV's sensor footprint. Events use a private RNG,
+so the environment's random stream is untouched.
 """
 from __future__ import annotations
 
@@ -48,6 +41,8 @@ class Event:
 
 
 class EventField:
+    """All events of one episode; reset() per episode, step() per step."""
+
     def __init__(self, cfg: EventConfig):
         self.cfg = cfg
         self.episode = 0
@@ -64,7 +59,7 @@ class EventField:
 
     # ------------------------------------------------------------------ step
     def step(self, env, t, active_positions):
-        """Spawn, grow and move events; return the events first detected this step."""
+        """Spawn, grow and move events; returns the events first detected this step."""
         cfg = self.cfg
         if self.rng.random() < cfg.rate:
             cell = self.spawn_cells[self.rng.integers(len(self.spawn_cells))]

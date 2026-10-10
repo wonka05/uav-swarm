@@ -1,11 +1,8 @@
-"""The results figure for the project report, made from the saved evaluation results and one recording.
+"""Results figure for the project report: one recorded mission and the four key numbers.
 
-Usage:
-    python -m evaluation.make_figures      # writes evaluation/figures/results_summary.png (300 dpi, white)
+Usage:  python -m evaluation.make_figures    # evaluation/figures/results_summary.png, 300 dpi
 
-Inputs (nothing is re-simulated):
-    evaluation/results/*.json                  100-map coverage results and 20-map patrol results, final controller
-    visualization/episode_seed42_smart100.npz  the recorded mission drawn on the map
+Reads evaluation/results/*.json and visualization/episode_seed42_smart100.npz; nothing is re-simulated.
 """
 from __future__ import annotations
 
@@ -47,13 +44,15 @@ def results_summary(data, map_path):
     steps = field(cover["arms"], "smart", "length")
     incidents = sum(np.nansum(field(cover["arms"], "smart", f)) for f in ("hits", "near_misses", "lost")) + \
         sum(np.nansum(field(patrol, "patrol_spares", f)) for f in ("hits", "near_misses", "lost"))
-    found = np.nansum(field(patrol, "patrol_spares", "events_detected")) / np.nansum(field(patrol, "patrol_spares", "events"))
+    found = (np.nansum(field(patrol, "patrol_spares", "events_detected"))
+             / np.nansum(field(patrol, "patrol_spares", "events")))
     detect = np.nanmean(field(patrol, "patrol_spares", "detect_delay_mean"))
     patrols = len(patrol["patrol_spares"]["fields"]["events"])
 
     fig = plt.figure(figsize=(7.2, 3.9))
     h = fig.get_size_inches()[1]
-    fig.text(0.012, 1 - 0.12 / h, "Five drones surveying a forest: results", fontsize=12.5, fontweight="semibold", va="top")
+    fig.text(0.012, 1 - 0.12 / h, "Five drones surveying a forest: results", fontsize=12.5,
+             fontweight="semibold", va="top")
     fig.text(0.012, 1 - 0.40 / h, f"Trained MADDPG policy with the mission controller. "
              f"Coverage on {n} test maps; patrols on {patrols} maps.", fontsize=9, color=INK2, va="top")
 

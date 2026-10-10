@@ -1,16 +1,12 @@
-"""Export recorded episodes for the 3D browser replay (visualization/web3d/index.html).
+"""Export recordings for the 3D browser replay (visualization/web3d/index.html).
 
 Usage:
     python visualization/export_web.py                         # every visualization/episode_*.npz
-    python visualization/export_web.py --inputs a.npz b.npz    # chosen recordings only
+    python visualization/export_web.py --inputs a.npz b.npz
 
-Each recording becomes visualization/web3d/episodes/<name>.js, a script that adds
-the episode to window.UAV_EPISODES, and episodes/index.js lists them. Plain
-scripts rather than JSON fetched at runtime, so index.html also opens straight
-from disk (browsers block fetch() from file:// pages).
-
-Positions, batteries and coverage are stored as integers (x100, %, per mille)
-to keep the files small; the page divides them back.
+Each recording becomes web3d/episodes/<name>.js and episodes/index.js lists them. They are
+scripts, not JSON, so index.html also works opened from disk. Numbers are stored as scaled
+integers (positions x100, battery %, coverage per mille) to keep the files small.
 """
 from __future__ import annotations
 
@@ -24,11 +20,10 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
-from pygame_dashboard import build_events, last_seen_history, load_episode  # noqa: E402
+from dashboard.episode import build_events, last_seen_history, load_episode  # noqa: E402
 
 OUT_DIR = os.path.join(HERE, "web3d", "episodes")
-# richest first: the page opens on the first episode in this order
+# richest first: the page opens on the first one
 ORDER = ["patrol", "smart100", "smart", "safe", "mission100", "mission", ""]
 
 
@@ -173,7 +168,7 @@ def main():
     args = parser.parse_args()
     paths = args.inputs or sorted(glob.glob(os.path.join(HERE, "episode_*.npz")))
     exported = dict(export(p) for p in paths)
-    # keep episodes exported earlier that this run did not touch
+    # keep episodes exported earlier
     listed = {}
     index = os.path.join(OUT_DIR, "index.js")
     for js in glob.glob(os.path.join(OUT_DIR, "*.js")):
@@ -186,7 +181,8 @@ def main():
         for item in old:
             if listed.get(item["id"]) is None and item["id"] in listed:
                 listed[item["id"]] = item["label"]
-    items = [{"id": k, "label": v or k, "file": f"episodes/{k}.js"} for k, v in sorted(listed.items(), key=lambda kv: rank(kv[0]))]
+    items = [{"id": k, "label": v or k, "file": f"episodes/{k}.js"}
+             for k, v in sorted(listed.items(), key=lambda kv: rank(kv[0]))]
     with open(index, "w", encoding="utf-8") as f:
         f.write("window.UAV_EPISODE_LIST = " + json.dumps(items, indent=1) + ";\n")
     print(f"{os.path.relpath(index, HERE)} lists {len(items)} episodes")

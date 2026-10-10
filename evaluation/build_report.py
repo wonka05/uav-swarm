@@ -1,16 +1,11 @@
-"""Build the interactive results report from evaluate_mission.py --output files.
+"""Interactive results report (one self-contained HTML file) from evaluate_mission.py --output files.
 
 Usage:
     python -m evaluation.build_report                                  # every evaluation/results/*.json
     python -m evaluation.build_report --inputs a.json b.json --output report.html
 
-Each input is one evaluate_mission.py run. Arms are keyed by what they are,
-not by their number: arms 5 and 6 run with --position-noise > 0 become
-"safety_noise" and "smart_noise", and patrol arms (7, 8) go in their own
-section because a patrol has no coverage target. When two inputs hold the
-same arm at the same target, the later one wins.
-
-The report is a single HTML file with the results embedded; it needs no server.
+Arms are keyed by what they are: arms 5-6 with position error become "safety_noise" and
+"smart_noise", and patrol arms get their own section. A later input wins over an earlier one.
 """
 from __future__ import annotations
 
@@ -29,6 +24,7 @@ PATROL = {"patrol_spares", "patrol_no_spares"}
 
 
 def arm_id(number, noise):
+    """Report key of an arm, e.g. 6 with position error -> "smart_noise"."""
     base = ARM_IDS[number]
     return f"{base}_noise" if noise and base in ("safety", "smart") else base
 
@@ -65,7 +61,8 @@ def build(paths):
 
 def main():
     p = argparse.ArgumentParser(description="Build the interactive results report.")
-    p.add_argument("--inputs", nargs="*", help="evaluate_mission.py --output files (default: evaluation/results/*.json)")
+    p.add_argument("--inputs", nargs="*",
+                   help="evaluate_mission.py --output files (default: evaluation/results/*.json)")
     p.add_argument("--output", default=os.path.join(RESULTS, "report.html"))
     args = p.parse_args()
     paths = args.inputs or sorted(glob.glob(os.path.join(RESULTS, "*.json")))
@@ -80,7 +77,8 @@ def main():
         f.write(html)
     targets = ", ".join(f"{t}%: {len(v['arms'])} arms" for t, v in sorted(data["targets"].items()))
     patrol = f", patrol: {len(data['patrol']['arms'])} arms" if data["patrol"] else ""
-    print(f"Wrote {args.output} ({os.path.getsize(args.output) / 1024:.0f} KB) from {len(paths)} files: {targets}{patrol}")
+    size_kb = os.path.getsize(args.output) / 1024
+    print(f"Wrote {args.output} ({size_kb:.0f} KB) from {len(paths)} files: {targets}{patrol}")
 
 
 if __name__ == "__main__":

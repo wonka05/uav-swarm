@@ -1,13 +1,13 @@
-"""Tests for planning/safety.py and the controller's safety layer.
+"""Safety supervisor and corner-free routing.
 
-Run with:  python -m tests.test_safety      (or: python -m pytest tests/test_safety.py)
-Unlike the older test scripts, these use assert, so a failure stops the run.
+Run with:  python -m tests.test_safety   (or: python -m pytest tests)
 """
 import numpy as np
 
 from env.grid import OBSTACLE
-from planning.safety import (LANDING_PADS, SafetySupervisor, cell_of, path_clear,
-                             robust_follow, safe_distance_field)
+from planning.mission import LANDING_PADS
+from planning.routing import cell_of, path_clear, robust_follow, safe_distance_field
+from planning.safety import SafetySupervisor
 
 
 def _grid(n=10, obstacles=()):
@@ -89,8 +89,5 @@ def test_return_home_tolerates_position_error():
 
 
 if __name__ == "__main__":
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    for t in tests:
-        t()
-        print(f"PASS  {t.__name__}")
-    print(f"\nALL {len(tests)} SAFETY TESTS PASSED")
+    from tests.runner import run_tests
+    run_tests(globals(), "SAFETY")
