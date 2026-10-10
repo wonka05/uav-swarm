@@ -181,10 +181,7 @@ step counter and loss histories. Optimiser state is not saved. Load one with `MA
 ├── env/
 │   ├── forest_env.py           # ForestEnv: map generation, step(), rewards, observations
 │   ├── grid.py                 # grid, obstacles, targets, sensor footprint, coverage rate
-│   ├── uav.py                  # UAV movement, battery, sensing, neighbours
-│   └── constants.py            # legacy constants, not imported (describes an outdated 293-value layout)
-├── planning/
-│   └── voronoi_planner.py      # Voronoi partition with SciPy KDTree
+│   └── uav.py                  # UAV movement, battery, sensing, neighbours
 ├── agents/
 │   ├── maddpg.py               # MADDPG: action selection, update, save/load
 │   ├── actor.py                # shared actor network
@@ -193,18 +190,28 @@ step counter and loss histories. Optimiser state is not saved. Load one with `MA
 │   └── noise.py                # Ornstein–Uhlenbeck exploration noise
 ├── training/
 │   └── train.py                # training loop, checkpoints, TensorBoard and CSV logging
+├── planning/
+│   ├── voronoi_planner.py      # Voronoi partition with SciPy KDTree
+│   ├── mission_controller.py   # mission layer around the policy: launch, return home, recharge, planner
+│   ├── safety.py               # safety layer: obstacle, map-edge and spacing checks, safe routes
+│   └── surveillance.py         # persistent patrol: fires and intruders that appear during a mission
 ├── evaluation/
-│   └── evaluate.py             # 100-episode noise-free evaluation
+│   ├── evaluate.py             # 100-episode evaluation of the trained policy alone
+│   ├── evaluate_mission.py     # the policy with each mission layer, on the same 100 maps
+│   ├── build_report.py         # interactive results report from evaluate_mission.py output
+│   ├── report_template.html
+│   ├── make_figures.py         # the results figure for the project report
+│   └── results/                # final evaluation results: mission_100.json, patrol.json
 ├── visualization/
-│   ├── record_episode.py       # record one noise-free episode to .npz
+│   ├── record_episode.py       # record one episode to .npz
 │   ├── pygame_dashboard.py     # interactive replay of a recorded episode
-│   ├── plot_metrics.py         # metric plots for a recorded episode
-│   └── export_video.py         # render a recorded episode to .avi or .gif
-├── tests/
-│   ├── test_env.py             # 63 checks on the grid, UAV and environment
-│   └── test_voronoi_planner.py # Voronoi planner demonstration script
-├── test_voronoi.py             # same planner script, runnable from the root
-└── test_maddpg.py              # MADDPG smoke test on random data
+│   ├── export_web.py           # export recordings for the 3D replay
+│   └── web3d/                  # 3D browser replay (three.js)
+└── tests/
+    ├── test_env.py             # checks on the grid, UAV and environment
+    ├── test_safety.py          # safety layer
+    ├── test_field_fixes.py     # mission-controller fixes for flying real drones
+    └── test_voronoi_planner.py # Voronoi planner demonstration script
 ```
 
 `checkpoints/` and `logs/` are created when you train and are excluded from git.
@@ -279,17 +286,11 @@ Logged scalars: `Reward/Mean`, `Metrics/Coverage`, `Metrics/Detections`, `Metric
 prints each episode's reward, coverage, detection and collisions, followed by the means and the best
 coverage and detection.
 
-Its config and checkpoint paths are constants at the top of the file. `CHECKPOINT_PATH` currently points
-to `checkpoints/fix300/maddpg_best.pt`; set it to the model you want, then run:
+Its config and checkpoint paths are constants at the top of the file; `CHECKPOINT_PATH` points to the
+final model, `checkpoints/final1500/maddpg_best.pt`.
 
 ```bash
 python -m evaluation.evaluate
-```
-
-To evaluate the final model without editing the file:
-
-```bash
-python -c "import evaluation.evaluate as e; e.CHECKPOINT_PATH = 'checkpoints/final1500/maddpg_best.pt'; e.main()"
 ```
 
 Evaluation is repeatable. Creating the `MADDPG` object seeds NumPy's global random generator (the
@@ -327,19 +328,15 @@ the starting replay speed in steps per second (default 15).
 Targets are labelled *animal* (the three moving ones), *fire* or *point of interest* for display only.
 The labels are assigned by `record_episode.py` and never reach the environment.
 
-### Plot metrics and export a video
+### Results figure
 
 ```bash
-python visualization/plot_metrics.py --input visualization/episode_seed42.npz --output visualization/results
-python visualization/export_video.py --input visualization/episode_seed42.npz --output visualization/episode_seed42.avi
+python visualization/record_episode.py --seed 42 --mission --safety --smart-planner --coverage-target 1.0 --output visualization/episode_seed42_smart100.npz
+python -m evaluation.make_figures
 ```
 
-`plot_metrics.py` writes `coverage.png`, `detection.png`, `rewards.png`, `battery.png`,
-`collisions.png`, `active_state.png`, `overview.png`, `summary.txt` and `summary.json`.
-
-`export_video.py` draws each frame with the dashboard's own renderer, without opening a window. The
-output format follows the extension: `.avi` (Motion-JPEG) or `.gif`. Options: `--fps` (default 15),
-`--start`, `--end` and `--hold` (seconds to hold the last frame, default 1.5).
+Writes `evaluation/figures/results_summary.png` from the saved results in
+`evaluation/results/` and the recorded seed-42 mission (the first command records it).
 
 ---
 
@@ -391,8 +388,9 @@ Voronoi seeds, the 5,000-transition warm-up, the gradient clip (0.5), the noise 
 | TensorBoard event files | `log_dir/run_<timestamp>/` | `train.py` |
 | `training_history_<timestamp>.csv` | `log_dir` | `train.py` |
 | Recorded episode (`.npz`) | path given by `--output` | `record_episode.py` |
-| Plots and `summary.txt` / `summary.json` | folder given by `--output` | `plot_metrics.py` |
-| Video (`.avi` / `.gif`) | path given by `--output` | `export_video.py` |
+| Per-map evaluation results (`.json`) | path given by `--output` | `evaluate_mission.py` |
+| Results report (`report.html`) | `evaluation/results/` | `build_report.py` |
+| Results figure (`results_summary.png`) | `evaluation/figures/` | `make_figures.py` |
 
 The history CSV has one row per episode with the columns `episode`, `mean_reward`, `coverage_rate`,
 `targets_detected`, `collision_count`, `active_agents`, `actor_loss`, `critic_loss`, `noise_sigma` and
@@ -407,8 +405,7 @@ What the metrics mean:
 - **Reward** — `evaluate.py` reports the sum over all five UAVs and all steps; the CSV's `mean_reward`
   is the average of the five UAVs' episode totals.
 
-`checkpoints/`, `logs/` and the default visualization outputs (`visualization/*.npz`,
-`visualization/*.avi`, `visualization/results/`) are git-ignored.
+`checkpoints/`, `logs/` and recorded episodes (`visualization/*.npz`) are git-ignored.
 
 ---
 
@@ -443,8 +440,8 @@ absolute rather than relative to a reference.
 |---|---|
 | `python tests/test_env.py` | 63 checks on grid generation, UAV movement, battery and sensing, and `ForestEnv` reset, step, observation shape and termination |
 | `python -m tests.test_voronoi_planner` | Prints the region sizes, the overlap between regions and a reassignment example for the planner |
-| `python test_voronoi.py` | The same planner script, runnable directly from the root |
-| `python test_maddpg.py` | Smoke test: fills the buffer with random data, runs one update, decays the noise, saves and reloads a checkpoint |
+| `python -m tests.test_safety` | Safety layer: corner-free routes, path checks, spacing between UAVs, return home under position error |
+| `python -m tests.test_field_fixes` | Mission-controller fixes: return home, stuck-return watchdog, incident response, fire no-fly zones |
 
 Notes:
 
@@ -452,8 +449,7 @@ Notes:
   `pytest tests/` reports success even when a check fails. Run the scripts directly and read the output.
 - The planner script has no assertions; it always ends with `ALL PLANNER TESTS PASSED`. It must be run
   with `-m` — `python tests/test_voronoi_planner.py` fails with `ModuleNotFoundError`.
-- `test_maddpg.py` uses random 293-value vectors rather than the environment, and writes
-  `checkpoints/test_ckpt.pt`.
+- `test_safety.py` and `test_field_fixes.py` use `assert`, so a failure stops the run.
 
 ---
 
@@ -472,7 +468,6 @@ Notes:
   target.
 - **Stale moving targets in the terrain patch.** Moving targets update their positions in the target
   part of the observation, but the terrain patch keeps showing them at their starting cells.
-- **Outdated dimensions in some files.** `env/constants.py` (293) and the default arguments and
-  docstrings in `agents/actor.py`, `agents/critic.py` and `agents/replay_buffer.py` (172, 293, 1475)
-  are out of date. The sizes actually used come from `ForestEnv.obs_dim`: 179 per UAV and 905 per
+- **Outdated dimensions in some files.** The default arguments and docstrings in `agents/actor.py`,
+  `agents/critic.py` and `agents/replay_buffer.py` (172, 293, 1475) are out of date. The sizes actually used come from `ForestEnv.obs_dim`: 179 per UAV and 905 per
   critic input.

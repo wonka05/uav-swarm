@@ -1,0 +1,594 @@
+<title>Forest Swarm Results</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Public+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: a single reading column (max 1120px) of white chart cards on a faintly green page plane;
+   one filter row scopes everything above the patrol section. Charts use the dataviz reference palette. */
+:root {
+  --page: #f3f5f1;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #7a7973;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --ring: rgba(11, 11, 11, 0.10);
+  --dim: #b4b3ac;          /* de-emphasised marks */
+  --s1: #2a78d6;           /* smart planner (and the first patrol set-up) */
+  --s2: #eb6834;
+  --s3: #1baf7a;
+  --s4: #eda100;
+  --accent: #2c6e45;       /* UI accent: forest green, never used for data */
+  --accent-wash: rgba(44, 110, 69, 0.10);
+  --good: #006300;
+  --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --sans: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #0e100f; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #8f8e88;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255, 255, 255, 0.10); --dim: #5c5b56;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --accent: #6fcf95; --accent-wash: rgba(111, 207, 149, 0.12); --good: #0ca30c;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --page: #0e100f; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #8f8e88;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255, 255, 255, 0.10); --dim: #5c5b56;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --accent: #6fcf95; --accent-wash: rgba(111, 207, 149, 0.12); --good: #0ca30c;
+  color-scheme: dark;
+}
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.55 var(--sans); }
+.wrap { max-width: 1120px; margin: 0 auto; padding-inline: 24px; padding-block: 28px 56px; display: grid; gap: 20px; }
+@media (max-width: 640px) { .wrap { padding-inline: 16px; } }
+h1 { margin: 0; font: 700 clamp(34px, 6vw, 52px)/0.95 var(--display); letter-spacing: 0.01em; text-transform: uppercase; text-wrap: balance; }
+h2 { margin: 0; font: 700 22px/1.1 var(--display); letter-spacing: 0.03em; text-transform: uppercase; text-wrap: balance; }
+h3 { margin: 0; font: 600 15px/1.3 var(--sans); }
+p { margin: 0; max-width: 68ch; }
+.lede { color: var(--ink-2); font-size: 16px; }
+.eyebrow { font: 600 12px var(--sans); letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); }
+header { display: grid; gap: 10px; }
+
+.filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--page); padding-block: 10px; border-bottom: 1px solid var(--grid); }
+.filters .label { font: 600 12px var(--sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+.seg { display: inline-flex; border: 1px solid var(--axis); border-radius: 6px; overflow: hidden; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label { padding: 6px 14px; cursor: pointer; font: 600 14px var(--sans); color: var(--ink-2); }
+.seg label:not(:first-of-type) { border-left: 1px solid var(--axis); }
+.seg input:checked + label { background: var(--accent-wash); color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent); }
+.seg input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: -2px; }
+.filters .scope { color: var(--muted); font-size: 13px; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 8px; padding: 14px 16px; display: grid; gap: 4px; align-content: start; min-width: 0; }
+.tile .k { font-size: 13px; color: var(--ink-2); }
+.tile .v { font: 600 34px/1.1 var(--sans); letter-spacing: -0.01em; }
+.tile .v small { font-size: 18px; font-weight: 500; color: var(--ink-2); }
+.tile .d { font-size: 13px; color: var(--muted); }
+
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 8px; padding: 18px 20px 20px; display: grid; gap: 12px; min-width: 0; }
+@media (max-width: 640px) { .card { padding: 14px 12px 16px; } }
+.card > *, details { min-width: 0; }       /* wide tables scroll inside their card, never the page */
+.card-head { display: grid; gap: 4px; }
+.card-head p { color: var(--ink-2); font-size: 14px; }
+.chart { position: relative; min-width: 0; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.chart text { font: 12px var(--sans); fill: var(--ink-2); }
+.chart .tick { fill: var(--muted); font-variant-numeric: tabular-nums; }
+.chart .rowlabel { fill: var(--ink); font-size: 13px; }
+.chart .value { fill: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.chart .na { fill: var(--muted); font-style: italic; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.legend i { width: 18px; height: 2px; border-radius: 1px; display: inline-block; }
+.legend i.dot { width: 9px; height: 9px; border-radius: 50%; }
+.note { font-size: 13px; color: var(--muted); }
+.multiples { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px 28px; }
+
+.tip { position: fixed; z-index: 20; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--ring);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.16); border-radius: 6px; padding: 8px 10px; font-size: 13px; min-width: 150px; max-width: 280px; }
+.tip .t { color: var(--ink-2); font-size: 12px; margin-bottom: 4px; }
+.tip .r { display: flex; align-items: center; gap: 8px; }
+.tip .r b { font-variant-numeric: tabular-nums; }
+.tip .r i { width: 14px; height: 2px; display: inline-block; }
+.tip .r span { color: var(--ink-2); }
+
+.explorer-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+button, select { font: 600 14px var(--sans); color: var(--ink); background: var(--surface); border: 1px solid var(--axis); border-radius: 6px; padding: 6px 12px; min-height: 34px; cursor: pointer; }
+button:hover, select:hover { border-color: var(--ink-2); }
+:is(button, select, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; font-variant-numeric: tabular-nums; }
+th:first-child, td:first-child { text-align: left; }
+th { font-weight: 600; color: var(--ink-2); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; vertical-align: bottom; }
+td.hero { font-weight: 600; }
+td .key { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; vertical-align: 1px; }
+.yes { color: var(--good); font-weight: 600; }
+details > summary { cursor: pointer; font-weight: 600; }
+details[open] > summary { margin-bottom: 10px; }
+dl { margin: 0; display: grid; grid-template-columns: minmax(150px, 220px) minmax(0, 1fr); gap: 8px 18px; font-size: 14px; }
+dt { font-weight: 600; }
+dd { margin: 0; color: var(--ink-2); }
+@media (max-width: 640px) { dl { grid-template-columns: minmax(0, 1fr); } dd { margin-bottom: 6px; } }
+footer { color: var(--muted); font-size: 13px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow">UAV swarm · MADDPG · evaluation</span>
+    <h1>Forest Swarm Results</h1>
+    <p class="lede" id="lede">Five drones searching a 50 × 50 forest. The same trained MADDPG policy is flown on the same fixed maps,
+      first on its own and then with each layer of the mission controller added in turn.</p>
+  </header>
+
+  <div class="filters" role="group" aria-label="Coverage target">
+    <span class="label">Mission ends at</span>
+    <div class="seg" id="target-seg"></div>
+    <span class="scope" id="scope"></span>
+  </div>
+
+  <section class="tiles" id="tiles" aria-label="Headline results"></section>
+
+  <section class="card" aria-labelledby="h-strip">
+    <div class="card-head">
+      <h2 id="h-strip">Coverage on every map</h2>
+      <p>Each dot is one map. The black tick and the number are the mean. Hover a dot for the map, click it to open that map below.</p>
+    </div>
+    <div class="legend" id="strip-legend"></div>
+    <div class="chart" id="strip"></div>
+  </section>
+
+  <section class="card" aria-labelledby="h-ecdf">
+    <div class="card-head">
+      <h2 id="h-ecdf">How long a mission takes</h2>
+      <p>Share of maps that have reached the coverage target by each step. Further left is faster; the line ends at the slowest map.</p>
+    </div>
+    <div class="legend" id="ecdf-legend"></div>
+    <div class="chart" id="ecdf"></div>
+    <p class="note" id="ecdf-note"></p>
+  </section>
+
+  <section class="card" aria-labelledby="h-harm">
+    <div class="card-head">
+      <h2 id="h-harm">What would hurt real drones</h2>
+      <p>In the simulator a drone that flies into a tree just stays where it was. Counted here as if each of these were a real incident. Mean per mission.</p>
+    </div>
+    <div class="multiples" id="harm"></div>
+  </section>
+
+  <section class="card" aria-labelledby="h-patrol" id="patrol-card">
+    <div class="card-head">
+      <h2 id="h-patrol">Persistent patrol</h2>
+      <p id="patrol-intro"></p>
+    </div>
+    <div class="legend" id="patrol-legend"></div>
+    <div class="chart" id="patrol"></div>
+    <p class="note" id="patrol-note"></p>
+  </section>
+
+  <section class="card" aria-labelledby="h-map">
+    <div class="card-head">
+      <h2 id="h-map">One map at a time</h2>
+      <p>Every set-up on the same map. Maps are numbered in the order evaluate.py generates them.</p>
+    </div>
+    <div class="explorer-bar">
+      <button type="button" id="map-prev" aria-label="Previous map">Previous</button>
+      <select id="map-select" aria-label="Map"></select>
+      <button type="button" id="map-next" aria-label="Next map">Next</button>
+      <button type="button" id="map-worst">Hardest map for the policy alone</button>
+    </div>
+    <div class="scroll"><table id="map-table"></table></div>
+  </section>
+
+  <section class="card" aria-labelledby="h-table">
+    <div class="card-head">
+      <h2 id="h-table">All the numbers</h2>
+      <p>Means over every map, the same values the charts show, plus the measures they leave out.</p>
+    </div>
+    <details open>
+      <summary>Table of results at the selected target</summary>
+      <div class="scroll"><table id="sum-table"></table></div>
+    </details>
+  </section>
+
+  <section class="card" aria-labelledby="h-method">
+    <div class="card-head"><h2 id="h-method">What each set-up adds</h2></div>
+    <dl id="method"></dl>
+    <dl>
+      <dt>Coverage</dt><dd>Share of the forest's open ground that has been inside some drone's sensor footprint (radius 5 cells) at least once.</dd>
+      <dt>Finished</dt><dd>Coverage reached the target before the step limit: 500 steps for the policy alone and the override, 1,500 once drones can return and recharge.</dd>
+      <dt>Obstacle hits</dt><dd>Every move a tree blocked, summed over the whole mission. evaluate.py reports a different number: how many drones were blocked on the last step only.</dd>
+      <dt>Near misses</dt><dd>Steps on which two airborne drones were closer than one cell.</dd>
+      <dt>Drones lost</dt><dd>Drones whose battery ran out away from the base, or that no longer had enough charge to get home when the mission ended.</dd>
+      <dt>Safety corrections</dt><dd>Moves the safety layer changed because they would have hit a tree, cut a corner between two trees, left the map or come too close to another drone.</dd>
+    </dl>
+  </section>
+
+  <footer id="footer"></footer>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script>
+(() => {
+'use strict';
+const DATA = /*REPORT_DATA*/null;
+const $ = (id) => document.getElementById(id);
+const ARMS = [
+  { id: 'policy', short: 'Policy only', what: 'The trained MADDPG actor flies all five drones on its own for 500 steps. This is exactly what evaluate.py measures.' },
+  { id: 'override', short: '+ Override', what: 'When a drone stops finding new ground, a planner steers it to the nearest uncovered cell.' },
+  { id: 'rth', short: '+ Return home', what: 'Drones fly back to base before the battery runs out, recharge and relaunch, so a mission can last 1,500 steps.' },
+  { id: 'staggered', short: '+ Staggered launch', what: 'Drones launch 40 steps apart, so their batteries never all run out at the same time.' },
+  { id: 'safety', short: '+ Safety layer', what: 'Every move is checked against trees, corners, the map edge and the other drones; routes never cut corners; each drone has its own landing pad and keeps a 20% battery reserve.' },
+  { id: 'safety_noise', short: '+ Safety, GPS error', what: 'The safety layer with a simulated position error of 0.1 cells.' },
+  { id: 'smart', short: '+ Smart planner', what: 'A stalled drone is sent to the spot that reveals the most unseen ground per distance flown, and the planner keeps it until it reaches fresh ground.' },
+  { id: 'smart_noise', short: '+ Smart, GPS error', what: 'The smart planner with a simulated position error of 0.1 cells.' },
+];
+const SLOT = { smart: 's1', safety: 's2', staggered: 's3', rth: 's4' };    // fixed per set-up, never by rank
+const HERO = new Set(['smart', 'smart_noise']);
+const PATROL = [
+  { id: 'patrol_spares', short: 'Spare batteries', slot: 's1' },
+  { id: 'patrol_no_spares', short: 'No spares', slot: 's2' },
+];
+const NS = 'http://www.w3.org/2000/svg';
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+function svg(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function text(parent, x, y, str, attrs = {}) { const t = svg('text', { x, y, ...attrs }, parent); t.textContent = str; return t; }
+function html(tag, props = {}, ...kids) {
+  const e = document.createElement(tag);
+  Object.assign(e, props);
+  for (const k of kids) e.append(k);
+  return e;
+}
+const vals = (a) => (a || []).filter((v) => v !== null && v !== undefined && !Number.isNaN(v));
+const mean = (a) => { const v = vals(a); return v.length ? v.reduce((x, y) => x + y, 0) / v.length : null; };
+const pct = (v, d = 1) => (v === null ? 'n/a' : `${(v * 100).toFixed(d)}%`);
+const num = (v, d = 1) => (v === null ? 'n/a' : v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }));
+const int = (v) => (v === null ? 'n/a' : Math.round(v).toLocaleString('en-US'));
+const niceStep = (span, n) => { const raw = span / n, p = 10 ** Math.floor(Math.log10(raw)), m = raw / p; return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p; };
+
+let target = null, mapIndex = 0;
+const targets = Object.keys(DATA.targets).sort((a, b) => +a - +b);
+target = targets.includes('95') ? '95' : targets[0];
+const T = () => DATA.targets[target];
+const armsHere = () => ARMS.filter((a) => T().arms[a.id]);
+const field = (id, f) => (T().arms[id] && T().arms[id].fields[f]) || null;
+
+// ---------------------------------------------------------------- tooltip
+const tip = $('tip');
+function showTip(evt, title, rows) {
+  tip.replaceChildren(html('div', { className: 't', textContent: title }));
+  for (const [value, label, colour] of rows) {
+    const r = html('div', { className: 'r' });
+    if (colour) r.append(html('i', { style: `background:${colour}` }));
+    r.append(html('b', { textContent: value }), html('span', { textContent: label }));
+    tip.append(r);
+  }
+  tip.hidden = false;
+  const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = evt.clientX + pad, y = evt.clientY + pad;
+  if (x + w > window.innerWidth - 8) x = evt.clientX - w - pad;
+  if (y + h > window.innerHeight - 8) y = evt.clientY - h - pad;
+  tip.style.left = `${Math.max(8, x)}px`; tip.style.top = `${Math.max(8, y)}px`;
+}
+const hideTip = () => { tip.hidden = true; };
+
+// ---------------------------------------------------------------- filter row and tiles
+function buildFilter() {
+  const seg = $('target-seg');
+  targets.forEach((t) => {
+    const id = `target-${t}`;
+    const input = html('input', { type: 'radio', name: 'target', id, value: t, checked: t === target });
+    input.addEventListener('change', () => { target = t; renderAll(); });
+    seg.append(input, html('label', { htmlFor: id, textContent: `${t}% coverage` }));
+  });
+}
+
+function tiles() {
+  const box = $('tiles'); box.replaceChildren();
+  const tile = (k, v, d, small) => {
+    const val = html('span', { className: 'v', textContent: v });
+    if (small) val.append(html('small', { textContent: small }));
+    box.append(html('div', { className: 'tile' }, html('span', { className: 'k', textContent: k }), val, html('span', { className: 'd', textContent: d })));
+  };
+  const maps = T().maps, best = T().arms.smart ? 'smart' : armsHere().slice(-1)[0].id;
+  const covP = mean(field('policy', 'coverage')), covB = mean(field(best, 'coverage'));
+  const doneB = vals(field(best, 'complete')).filter(Boolean).length;
+  const lenB = (field(best, 'length') || []).filter((_, i) => field(best, 'complete')[i]);
+  tile('Trained policy on its own', pct(covP), `mean coverage in evaluate.py's 500-step episode`);
+  tile('With the full mission controller', pct(covB), `${doneB} of ${maps} maps reached ${target}%`);
+  tile('Steps to finish, full controller', int(mean(lenB)), `slowest map: ${int(Math.max(...lenB))} steps`, ' steps');
+  for (const [f, k] of [['hits', 'Obstacle hits per mission'], ['lost', 'Drones lost per mission']]) {
+    const a = mean(field('policy', f)), b = mean(field(best, f));
+    if (b === null) continue;
+    tile(k, a === null ? num(b, 1) : `${num(a, f === 'lost' ? 2 : 1)} → ${num(b, f === 'lost' ? 2 : 1)}`,
+      a === null ? 'policy alone not measured at this target' : 'policy alone → full controller');
+  }
+  const noted = armsHere().filter((a) => T().arms[a.id].note);
+  $('scope').textContent = `${maps} fixed maps · ${armsHere().length} set-ups` + (noted.length ? ' · some measured in an earlier run, see the notes' : '');
+}
+
+// ---------------------------------------------------------------- strip plot: coverage per map
+function strip() {
+  const root = $('strip'); root.replaceChildren();
+  const arms = armsHere(), W = root.clientWidth || 800, narrow = W < 560;
+  const left = narrow ? 112 : 150, right = 64, rowH = 36, top = 8, bottom = 30;
+  const H = top + rows(arms.length) + bottom;
+  function rows(n) { return n * rowH; }
+  const all = arms.flatMap((a) => vals(field(a.id, 'coverage')));
+  const lo = Math.max(0, Math.floor(Math.min(...all) * 20) / 20), hi = 1;
+  const X = (v) => left + ((v - lo) / (hi - lo)) * (W - left - right);
+  const s = svg('svg', { viewBox: `0 0 ${W} ${H}`, height: H, role: 'img', 'aria-label': 'Coverage per map for each set-up' }, root);
+  const step = niceStep(hi - lo, narrow ? 4 : 6);
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) {
+    svg('line', { x1: X(v), x2: X(v), y1: top, y2: H - bottom, stroke: 'var(--grid)', 'stroke-width': 1 }, s);
+    text(s, X(v), H - bottom + 18, `${Math.round(v * 100)}%`, { class: 'tick', 'text-anchor': 'middle' });
+  }
+  const tgt = +target / 100;
+  if (tgt > lo && tgt < hi) {
+    svg('line', { x1: X(tgt), x2: X(tgt), y1: top, y2: H - bottom, stroke: 'var(--axis)', 'stroke-width': 1 }, s);
+  }
+  const jitter = (i) => (((i * 2654435761) >>> 0) % 1000) / 1000 - 0.5;
+  arms.forEach((a, r) => {
+    const cy = top + r * rowH + rowH / 2, cov = field(a.id, 'coverage'), hero = HERO.has(a.id);
+    text(s, 0, cy + 4, a.short, { class: 'rowlabel' });
+    const g = svg('g', {}, s);
+    cov.forEach((v, i) => {
+      if (v === null) return;
+      svg('circle', { cx: X(v), cy: cy + jitter(i) * 16, r: 4, fill: hero ? 'var(--s1)' : 'var(--dim)', 'fill-opacity': 0.6 }, g);
+    });
+    const sel = cov[mapIndex];
+    if (sel !== null && sel !== undefined) {
+      svg('circle', { cx: X(sel), cy: cy + jitter(mapIndex) * 16, r: 6, fill: 'none', stroke: 'var(--ink)', 'stroke-width': 2 }, s);
+    }
+    const m = mean(cov);
+    svg('line', { x1: X(m), x2: X(m), y1: cy - 12, y2: cy + 12, stroke: 'var(--ink)', 'stroke-width': 2, 'stroke-linecap': 'round' }, s);
+    text(s, W - right + 10, cy + 4, pct(m), { class: 'value' });
+    const hit = svg('rect', { x: left - 6, y: cy - rowH / 2, width: W - left - right + 12, height: rowH, fill: 'transparent', style: 'cursor:pointer' }, s);
+    const nearest = (evt) => {
+      const pt = s.createSVGPoint(); pt.x = evt.clientX; pt.y = evt.clientY;
+      const p = pt.matrixTransform(s.getScreenCTM().inverse());
+      let best = -1, bd = Infinity;
+      cov.forEach((v, i) => { if (v === null) return; const d = Math.abs(X(v) - p.x) + Math.abs(cy + jitter(i) * 16 - p.y) * 0.4; if (d < bd) { bd = d; best = i; } });
+      return best;
+    };
+    let ring = null;
+    hit.addEventListener('pointermove', (evt) => {
+      const i = nearest(evt); if (i < 0) return;
+      if (!ring) ring = svg('circle', { r: 6, fill: 'none', stroke: 'var(--ink-2)', 'stroke-width': 2, 'pointer-events': 'none' }, s);
+      ring.setAttribute('cx', X(cov[i])); ring.setAttribute('cy', cy + jitter(i) * 16);
+      const len = field(a.id, 'length')[i], done = (field(a.id, 'complete') || [])[i];
+      showTip(evt, `${a.short} · map ${i + 1}`, [[pct(cov[i]), 'coverage'], [int(len), done ? 'steps, finished' : 'steps, did not finish']]);
+    });
+    hit.addEventListener('pointerleave', () => { hideTip(); if (ring) { ring.remove(); ring = null; } });
+    hit.addEventListener('click', (evt) => { const i = nearest(evt); if (i >= 0) selectMap(i, true); });
+  });
+  $('strip-legend').replaceChildren(
+    html('span', {}, html('i', { className: 'dot', style: 'background:var(--s1)' }), 'Smart planner rows'),
+    html('span', {}, html('i', { className: 'dot', style: 'background:var(--dim)' }), 'Other set-ups'),
+    html('span', {}, html('i', { style: 'background:var(--ink);height:12px;width:2px' }), 'Mean'),
+    html('span', {}, html('i', { className: 'dot', style: 'background:none;border:2px solid var(--ink);width:7px;height:7px' }), `Map ${mapIndex + 1} (selected below)`));
+}
+
+// ---------------------------------------------------------------- ECDF: maps finished by step
+function ecdf() {
+  const root = $('ecdf'); root.replaceChildren();
+  const series = ['smart', 'safety', 'staggered', 'rth'].filter((id) => T().arms[id] && field(id, 'complete'))
+    .map((id) => {
+      const done = field(id, 'complete'), len = field(id, 'length');
+      const steps = len.filter((_, i) => done[i]).sort((a, b) => a - b);
+      return { id, arm: ARMS.find((a) => a.id === id), steps, n: done.length };
+    });
+  const W = root.clientWidth || 800, H = 300, left = 46, right = 18, top = 14, bottom = 34;
+  const xmax = Math.ceil(Math.max(...series.flatMap((s) => s.steps), 100) / 100) * 100;
+  const X = (v) => left + (v / xmax) * (W - left - right), Y = (v) => top + (1 - v) * (H - top - bottom);
+  const s = svg('svg', { viewBox: `0 0 ${W} ${H}`, height: H, role: 'img', 'aria-label': 'Share of maps finished by step' }, root);
+  for (const v of [0, 0.25, 0.5, 0.75, 1]) {
+    svg('line', { x1: left, x2: W - right, y1: Y(v), y2: Y(v), stroke: v === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 }, s);
+    text(s, left - 8, Y(v) + 4, `${v * 100}%`, { class: 'tick', 'text-anchor': 'end' });
+  }
+  const xs = niceStep(xmax, W < 560 ? 4 : 8);
+  for (let v = 0; v <= xmax; v += xs) text(s, X(v), H - bottom + 18, int(v), { class: 'tick', 'text-anchor': 'middle' });
+  text(s, W - right, H - 4, 'steps', { class: 'tick', 'text-anchor': 'end' });
+  const share = (sr, x) => { let k = 0; while (k < sr.steps.length && sr.steps[k] <= x) k++; return k / sr.n; };
+  for (const sr of series) {
+    let d = `M${X(0)},${Y(0)}`, prev = 0;
+    sr.steps.forEach((st, k) => { d += ` H${X(st)} V${Y((k + 1) / sr.n)}`; prev = (k + 1) / sr.n; });
+    svg('path', { d, fill: 'none', stroke: `var(--${SLOT[sr.id]})`, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, s);
+    const last = sr.steps[sr.steps.length - 1];
+    if (last !== undefined) svg('circle', { cx: X(last), cy: Y(prev), r: 4, fill: `var(--${SLOT[sr.id]})`, stroke: 'var(--surface)', 'stroke-width': 2 }, s);
+  }
+  const hero = series.find((sr) => sr.id === 'smart');
+  if (hero && hero.steps.length) {                                     // one direct label: the story's series
+    const last = hero.steps[hero.steps.length - 1], frac = hero.steps.length / hero.n;
+    text(s, X(last) + 10, Y(frac) + 16, (hero.steps.length === hero.n ? 'every map' : `${hero.steps.length} maps`) + ` by step ${int(last)}`, { class: 'value' });
+  }
+  const cross = svg('line', { y1: top, y2: H - bottom, stroke: 'var(--ink-2)', 'stroke-width': 1, visibility: 'hidden' }, s);
+  const hit = svg('rect', { x: left, y: top, width: W - left - right, height: H - top - bottom, fill: 'transparent' }, s);
+  hit.addEventListener('pointermove', (evt) => {
+    const pt = s.createSVGPoint(); pt.x = evt.clientX; pt.y = evt.clientY;
+    const p = pt.matrixTransform(s.getScreenCTM().inverse());
+    const step = Math.max(0, Math.min(xmax, Math.round(((p.x - left) / (W - left - right)) * xmax / 5) * 5));
+    cross.setAttribute('x1', X(step)); cross.setAttribute('x2', X(step)); cross.setAttribute('visibility', 'visible');
+    showTip(evt, `By step ${int(step)}`, series.map((sr) => [pct(share(sr, step), 0), sr.arm.short, `var(--${SLOT[sr.id]})`]));
+  });
+  hit.addEventListener('pointerleave', () => { hideTip(); cross.setAttribute('visibility', 'hidden'); });
+  $('ecdf-legend').replaceChildren(...series.map((sr) => html('span', {}, html('i', { style: `background:var(--${SLOT[sr.id]})` }), sr.arm.short)));
+  const early = armsHere().filter((a) => !series.find((sr) => sr.id === a.id) && field(a.id, 'complete'));
+  $('ecdf-note').textContent = early.map((a) => {
+    const done = vals(field(a.id, 'complete')).filter(Boolean).length;
+    return `${a.short}: ${done} of ${T().maps} maps finished`;
+  }).join(' · ') + (early.length ? '. These set-ups stop at 500 steps or are left out to keep the chart readable; every value is in the table below.' : '');
+}
+
+// ---------------------------------------------------------------- small multiples: harm
+function harm() {
+  const root = $('harm'); root.replaceChildren();
+  const metrics = [['hits', 'Obstacle hits', 1], ['near_misses', 'Near misses', 1], ['lost', 'Drones lost', 2]];
+  const boxes = metrics.map(([, title]) => root.appendChild(html('div', { className: 'chart' }, html('h3', { textContent: title }))));
+  metrics.forEach(([f, title, digits], b) => {                // lay out all panels first, then measure each
+    const box = boxes[b];
+    const arms = armsHere(), W = box.clientWidth || 340, left = 128, right = 48, rowH = 28, top = 8;
+    const H = top + arms.length * rowH + 6;
+    const means = arms.map((a) => mean(field(a.id, f)));
+    const max = Math.max(...means.filter((v) => v !== null), 1e-9);
+    const X = (v) => left + (v / max) * (W - left - right);
+    const s = svg('svg', { viewBox: `0 0 ${W} ${H}`, height: H, role: 'img', 'aria-label': `${title} per mission` }, box);
+    svg('line', { x1: left, x2: left, y1: top - 4, y2: H - 2, stroke: 'var(--axis)', 'stroke-width': 1 }, s);
+    arms.forEach((a, r) => {
+      const cy = top + r * rowH + rowH / 2, v = means[r];
+      text(s, 0, cy + 4, a.short, { class: 'rowlabel' });
+      if (v === null) { text(s, left + 8, cy + 4, 'not measured', { class: 'na' }); return; }
+      const w = Math.max(0, X(v) - left), h = 14, y = cy - h / 2, rr = Math.min(4, w);
+      if (w > 0.5) {
+        svg('path', { d: `M${left},${y} H${left + w - rr} Q${left + w},${y} ${left + w},${y + rr} V${y + h - rr} Q${left + w},${y + h} ${left + w - rr},${y + h} H${left} Z`,
+          fill: HERO.has(a.id) ? 'var(--s1)' : 'var(--dim)' }, s);
+      }
+      text(s, left + w + 6, cy + 4, num(v, v === 0 ? 0 : digits), { class: 'value' });
+      const any = vals(field(a.id, f)).filter((x) => x > 0).length;
+      const hit = svg('rect', { x: 0, y: cy - rowH / 2, width: W, height: rowH, fill: 'transparent' }, s);
+      hit.addEventListener('pointermove', (evt) => showTip(evt, a.short, [[num(v, digits), `${title.toLowerCase()} per mission`], [`${any}`, `of ${T().maps} maps had at least one`]]));
+      hit.addEventListener('pointerleave', hideTip);
+    });
+  });
+}
+
+// ---------------------------------------------------------------- patrol comparison
+function patrol() {
+  const P = DATA.patrol;
+  if (!P || !Object.keys(P.arms).length) {
+    $('patrol-intro').textContent = 'No patrol results in this report yet. Run evaluate_mission.py with --arms 7,8 --output and rebuild it.';
+    $('patrol').replaceChildren(); $('patrol-legend').replaceChildren(); $('patrol-note').textContent = '';
+    return;
+  }
+  const arms = PATROL.filter((a) => P.arms[a.id]);
+  const maps = Math.max(...arms.map((a) => P.arms[a.id].maps));
+  $('patrol-intro').textContent = `A patrol has no finish line. For ${int(P.steps)} steps the drones keep revisiting the ground seen longest ago, `
+    + `while fires and intruders appear at random places and times and stay hidden from the drones until a sensor sees them. `
+    + `Two set-ups on the same ${maps} maps: ${P.spare_packs} charged spare batteries swapped at the base, or none, so each drone waits for its own battery to recharge.`;
+  $('patrol-legend').replaceChildren(...arms.map((a) => html('span', {}, html('i', { className: 'dot', style: `background:var(--${a.slot})` }), a.short)));
+  const g = (id, f) => P.arms[id].fields[f] || null;
+  const rows = [
+    ['Forest seen in the last 100 steps', (id) => mean(g(id, 'recent_share')), (v) => pct(v), 'higher is better; second half of patrol'],
+    ['Drones in the air', (id) => mean(g(id, 'mean_field')), (v) => num(v, 2), 'mean over the patrol, out of 5'],
+    ['Time since a cell was last seen', (id) => mean(g(id, 'mean_age')), (v) => `${int(v)} steps`, 'lower is better'],
+    ['Incidents detected', (id) => { const e = vals(g(id, 'events')).reduce((x, y) => x + y, 0); return e ? vals(g(id, 'events_detected')).reduce((x, y) => x + y, 0) / e : null; }, (v) => pct(v), 'found before the patrol ended'],
+    ['Time to detect an incident', (id) => mean(g(id, 'detect_delay_mean')), (v) => `${int(v)} steps`, 'mean per patrol, lower is better'],
+    ['Slowest detection', (id) => mean(g(id, 'detect_delay_max')), (v) => `${int(v)} steps`, 'worst incident per patrol, averaged'],
+    ['Battery swaps', (id) => mean(g(id, 'swaps')), (v) => num(v, 1), 'per patrol'],
+    ['Drone-steps flown by the planner', (id) => mean(g(id, 'controlled')), (v) => pct(v, 0), 'the rest are flown by the trained policy'],
+    ['Obstacle hits', (id) => mean(g(id, 'hits')), (v) => num(v, 1), 'per patrol'],
+    ['Drones lost', (id) => mean(g(id, 'lost')), (v) => num(v, 2), 'per patrol'],
+  ];
+  const root = $('patrol'); root.replaceChildren();
+  const W = root.clientWidth || 800, narrow = W < 620;
+  const labelW = narrow ? W : 280, barL = narrow ? 0 : labelW + 12, valW = 92, rowGap = narrow ? 64 : 50;
+  const H = rows.length * rowGap + 6;
+  const s = svg('svg', { viewBox: `0 0 ${W} ${H}`, height: H, role: 'img', 'aria-label': 'Patrol with and without spare batteries' }, root);
+  rows.forEach(([label, fn, fmt, hint], r) => {
+    const y0 = r * rowGap + 4;
+    text(s, 0, y0 + 13, label, { class: 'rowlabel' });
+    if (!narrow) text(s, 0, y0 + 31, hint, { class: 'tick' });
+    const values = arms.map((a) => fn(a.id)), max = Math.max(...values.filter((v) => v !== null), 1e-9);
+    const span = W - barL - valW;
+    arms.forEach((a, k) => {
+      const v = values[k], y = (narrow ? y0 + 20 : y0 + 2) + k * 16, w = v === null ? 0 : (v / max) * span, rr = Math.min(4, w);
+      if (w > 0.5) svg('path', { d: `M${barL},${y} H${barL + w - rr} Q${barL + w},${y} ${barL + w},${y + rr} V${y + 12 - rr} Q${barL + w},${y + 12} ${barL + w - rr},${y + 12} H${barL} Z`, fill: `var(--${a.slot})` }, s);
+      text(s, barL + w + 6, y + 10, v === null ? 'n/a' : fmt(v), { class: 'value' });
+    });
+    const hit = svg('rect', { x: 0, y: y0 - 2, width: W, height: rowGap - 4, fill: 'transparent' }, s);
+    hit.addEventListener('pointermove', (evt) => showTip(evt, label, arms.map((a, k) => [values[k] === null ? 'n/a' : fmt(values[k]), a.short, `var(--${a.slot})`])));
+    hit.addEventListener('pointerleave', hideTip);
+  });
+  $('patrol-note').textContent = `${maps} maps per set-up, ${int(P.steps)} steps each. Each row has its own scale; the bars compare the two set-ups within a row.`;
+}
+
+// ---------------------------------------------------------------- map explorer and tables
+function selectMap(i, scroll) {
+  mapIndex = Math.max(0, Math.min(T().maps - 1, i));
+  $('map-select').value = mapIndex;
+  mapTable(); strip();
+  if (scroll) $('h-map').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+}
+function tableFrom(el, head, body) {
+  el.replaceChildren(html('thead', {}, html('tr', {}, ...head.map((h) => html('th', { scope: 'col', textContent: h })))),
+    html('tbody', {}, ...body.map((cells) => html('tr', {}, ...cells))));
+}
+function nameCell(a) {
+  const td = html('td', { className: HERO.has(a.id) ? 'hero' : '' });
+  if (SLOT[a.id]) td.append(html('span', { className: 'key', style: `background:var(--${SLOT[a.id]})` }));
+  td.append(a.short);
+  if (T().arms[a.id].note) td.append(html('span', { className: 'note', textContent: ' *' }));
+  return td;
+}
+const td = (t, cls) => html('td', { textContent: t, className: cls || '' });
+function mapTable() {
+  const i = mapIndex, get = (a, f) => { const c = field(a.id, f); return c ? c[i] : null; };
+  tableFrom($('map-table'), ['Set-up', 'Coverage', 'Targets found', 'Steps', 'Finished', 'Obstacle hits', 'Near misses', 'Drones lost', 'Safety corrections'],
+    armsHere().map((a) => {
+      const done = get(a, 'complete');
+      return [nameCell(a), td(pct(get(a, 'coverage'))), td(pct(get(a, 'detection'), 0)), td(int(get(a, 'length'))),
+        td(done === null ? 'n/a' : done ? 'yes' : 'no', done ? 'yes' : ''), td(int(get(a, 'hits'))), td(int(get(a, 'near_misses'))),
+        td(int(get(a, 'lost'))), td(int(get(a, 'interventions')))];
+    }));
+}
+function sumTable() {
+  const head = ['Set-up', 'Coverage', 'Worst map', 'Finished', 'Steps (finished maps)', 'Targets found', 'Obstacle hits', 'Corner squeezes',
+    'Edge clamps', 'Near misses', 'Drones lost', 'Safety corrections', 'Returns to base', 'Flown by planner'];
+  tableFrom($('sum-table'), head, armsHere().map((a) => {
+    const cov = vals(field(a.id, 'coverage')), done = field(a.id, 'complete') || [], len = field(a.id, 'length') || [];
+    const fin = len.filter((_, i) => done[i]);
+    const m = (f, d) => num(mean(field(a.id, f)), d);
+    return [nameCell(a), td(pct(mean(cov))), td(pct(Math.min(...cov))), td(`${done.filter(Boolean).length} / ${T().maps}`),
+      td(fin.length ? int(mean(fin)) : '–'), td(pct(mean(field(a.id, 'detection')))), td(m('hits', 1)), td(m('squeezes', 1)),
+      td(m('clamps', 1)), td(m('near_misses', 1)), td(m('lost', 2)), td(m('interventions', 1)), td(m('returns', 1)),
+      td(pct(mean(field(a.id, 'controlled')), 0))];
+  }));
+}
+function method() {
+  const dl = $('method'); dl.replaceChildren();
+  for (const a of ARMS) {
+    const entry = T().arms[a.id];
+    dl.append(html('dt', { textContent: a.short }), html('dd', { textContent: a.what + (entry && entry.note ? ` * At ${target}%: ${entry.note}.` : '') }));
+  }
+}
+
+function renderAll() {
+  const maps = T().maps;
+  const sel = $('map-select');
+  sel.replaceChildren(...Array.from({ length: maps }, (_, i) => html('option', { value: i, textContent: `Map ${i + 1}` })));
+  mapIndex = Math.min(mapIndex, maps - 1); sel.value = mapIndex;
+  tiles(); strip(); ecdf(); harm(); mapTable(); sumTable(); method();
+}
+
+buildFilter();
+$('map-select').addEventListener('change', (e) => selectMap(+e.target.value));
+$('map-prev').addEventListener('click', () => selectMap(mapIndex - 1));
+$('map-next').addEventListener('click', () => selectMap(mapIndex + 1));
+$('map-worst').addEventListener('click', () => {
+  const cov = field('policy', 'coverage') || [];
+  let k = 0; cov.forEach((v, i) => { if (v !== null && v < cov[k]) k = i; });
+  selectMap(k);
+});
+renderAll();
+patrol();
+$('footer').textContent = `Built ${DATA.generated} from ${DATA.sources.join(', ')} · checkpoint ${DATA.checkpoint} · `
+  + 'charts in the dataviz reference palette; every value is also in the tables.';
+let lastW = 0;
+new ResizeObserver((entries) => {
+  const w = Math.round(entries[0].contentRect.width);
+  if (Math.abs(w - lastW) < 2) return;
+  lastW = w; strip(); ecdf(); harm(); patrol();
+}).observe($('strip'));
+})();
+</script>
