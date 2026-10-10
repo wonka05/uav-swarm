@@ -1,0 +1,1070 @@
+<title>Forest Swarm 3D Replay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: full-height operations console. 3D forest on the left with its transport bar beneath,
+   a status rail on the right (summary first, then drones, incidents, log); stacks on phones. */
+:root {
+  --night: #0c130f;      /* page ground: forest at night */
+  --deep: #08100c;       /* behind the 3D view */
+  --panel: #121b16;
+  --raise: #19241e;
+  --line: #26352d;
+  --text: #e3ebe5;
+  --muted: #8b9f94;
+  --signal: #7fd0f2;     /* radio, "seen recently" */
+  --canopy: #5fbf86;     /* coverage, trained policy */
+  --plan: #f0cf4a;       /* planner, safety corrections */
+  --track: #ff5c8a;      /* drone sent to an incident */
+  --fire: #ff7a2f;
+  --intruder: #c07cff;
+  --danger: #e8573a;
+  --display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --data: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--night); color: var(--text); font: 14px/1.45 var(--body); }
+.app {
+  box-sizing: border-box; height: 100%;
+  display: grid; grid-template-columns: minmax(0, 1fr) 350px; grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px 16px; padding-inline: 16px; padding-block: 12px;
+}
+header { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
+h1 { margin: 0; font: 600 26px/1 var(--display); letter-spacing: 0.02em; text-transform: uppercase; text-wrap: balance; }
+h1 span { color: var(--muted); font-weight: 500; }
+.picker { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 320px; }
+.picker label { font: 600 13px var(--display); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+select, button {
+  font: 500 13px var(--body); color: var(--text); background: var(--raise);
+  border: 1px solid var(--line); border-radius: 4px; padding: 5px 9px; min-height: 30px;
+}
+select { min-width: 0; max-width: 100%; }
+#episode { flex: 1; }
+button { cursor: pointer; }
+button:hover, select:hover { border-color: var(--muted); }
+:is(button, select, input):focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+.stage { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+.viewport { position: relative; flex: 1; min-height: 300px; border-radius: 6px; overflow: hidden; background: var(--deep); border: 1px solid var(--line); }
+#scene { display: block; width: 100%; height: 100%; }
+#labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.tag {
+  position: absolute; left: 0; top: 0; white-space: nowrap; will-change: transform;
+  font: 600 11px/1 var(--display); letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 3px 6px; border-radius: 3px; background: rgba(8, 14, 11, 0.82); color: var(--text);
+  border-left: 3px solid currentColor;
+}
+.tag b { font-weight: 700; }
+.tag .who { color: var(--text); }
+.pin { color: var(--fire); }
+.hud {
+  position: absolute; left: 12px; top: 10px; pointer-events: none;
+  font: 500 13px var(--data); color: var(--muted); text-shadow: 0 1px 2px #000;
+}
+.hud strong { display: block; font: 600 30px/1 var(--display); color: var(--text); letter-spacing: 0.02em; }
+.legend {
+  position: absolute; left: 12px; bottom: 10px; right: 12px; display: flex; flex-wrap: wrap; gap: 4px 14px;
+  pointer-events: none; font: 500 12px var(--body); color: var(--muted); text-shadow: 0 1px 2px #000;
+}
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+.loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font: 600 18px var(--display); letter-spacing: 0.08em; text-transform: uppercase; }
+
+.transport { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+#play { min-width: 74px; font-weight: 700; }
+.scrub { position: relative; flex: 1 1 260px; min-width: 0; height: 36px; }
+#timeline { position: absolute; inset: 0 0 12px 0; width: 100%; height: 24px; border-radius: 3px; }
+#scrub { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; margin: 0; accent-color: var(--canopy); }
+.inline { display: flex; align-items: center; gap: 6px; font: 600 13px var(--display); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.layers { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); }
+.layers label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.layers input { accent-color: var(--canopy); }
+
+.panel { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding-right: 4px; }
+.panel h2 { margin: 0 0 6px; font: 600 15px var(--display); letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+.readouts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 8px 10px; min-width: 0; }
+.stat .k { display: block; font: 600 12px var(--display); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.stat .v { font: 600 28px/1.1 var(--display); font-variant-numeric: tabular-nums; }
+.stat .u { color: var(--muted); font: 400 12px var(--data); }
+.stat .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+.stat .bar span { display: block; height: 100%; background: currentColor; }
+#s-cov { color: var(--canopy); }
+#s-fresh { color: var(--signal); }
+.stat .v, .stat .u { color: var(--text); }
+
+.drones { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.drone { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; align-items: center; gap: 2px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 6px 8px; }
+.drone .name { font: 700 14px var(--display); letter-spacing: 0.04em; display: flex; align-items: center; gap: 6px; }
+.drone .name i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.drone .batt { display: flex; align-items: center; gap: 6px; font: 500 12px var(--data); font-variant-numeric: tabular-nums; min-width: 0; }
+.drone .batt span { flex: 1; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; min-width: 30px; }
+.drone .batt span b { display: block; height: 100%; }
+.pill { font: 700 11px/1 var(--display); letter-spacing: 0.08em; text-transform: uppercase; padding: 4px 7px; border-radius: 10px; color: var(--deep); background: var(--muted); }
+.drone .status { grid-column: 2 / -1; font: 600 13px var(--display); letter-spacing: 0.05em; text-transform: uppercase; }
+.fleet { margin: 6px 0 0; font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.packs { display: inline-flex; gap: 4px; vertical-align: -2px; }
+.packs b { width: 18px; height: 9px; border: 1px solid var(--muted); border-radius: 2px; position: relative; display: inline-block; }
+.packs b span { position: absolute; left: 1px; top: 1px; bottom: 1px; border-radius: 1px; }
+
+.incidents, .log { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.incident { display: grid; grid-template-columns: 6px minmax(0, 1fr); gap: 0 8px; font-size: 13px; }
+.incident::before { content: ""; border-radius: 3px; background: currentColor; grid-row: 1 / 3; }
+.incident .what { font: 700 14px var(--display); letter-spacing: 0.04em; text-transform: uppercase; }
+.incident .state { color: var(--muted); }
+.summary { margin: -2px 0 6px; font-size: 12px; color: var(--muted); }
+.log li { display: grid; grid-template-columns: 46px minmax(0, 1fr); gap: 8px; font-size: 13px; }
+.log time { font: 400 12px var(--data); color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 1px; }
+.note { font-size: 12px; color: var(--muted); margin: 0; }
+
+@media (max-width: 960px) {
+  html, body { height: auto; }
+  .app { display: flex; flex-direction: column; height: auto; }
+  .viewport { flex: none; height: 60vh; min-height: 280px; }
+  .panel { overflow: visible; }
+}
+@media (max-width: 600px) {
+  .legend, #hud-sub { display: none; }
+  .hud strong { font-size: 24px; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+
+<div class="app">
+  <header>
+    <h1>Forest Swarm <span>3D replay</span></h1>
+    <div class="picker">
+      <label for="episode">Episode</label>
+      <select id="episode"></select>
+    </div>
+  </header>
+
+  <main class="stage">
+    <div class="viewport" id="viewport">
+      <canvas id="scene" aria-label="3D view of the forest and the five drones"></canvas>
+      <div id="labels"></div>
+      <div class="hud"><strong id="hud-step">Step 0</strong><span id="hud-sub"></span></div>
+      <div class="legend" id="legend">
+        <span><i style="background:var(--canopy)"></i>AI trained policy</span>
+        <span><i style="background:var(--plan)"></i>PL planner</span>
+        <span><i style="background:var(--signal)"></i>RTH returning</span>
+        <span><i style="background:var(--track)"></i>TRK confirming an incident</span>
+        <span><i style="background:var(--fire)"></i>fire</span>
+        <span><i style="background:var(--intruder)"></i>intruder</span>
+      </div>
+      <div class="loading" id="loading">Loading episode</div>
+    </div>
+    <div class="transport">
+      <button id="play" type="button">Pause</button>
+      <button id="restart" type="button">Restart</button>
+      <label class="inline" for="speed">Speed
+        <select id="speed"></select>
+      </label>
+      <div class="scrub">
+        <canvas id="timeline" aria-hidden="true"></canvas>
+        <input id="scrub" type="range" min="0" max="1" value="0" step="1" aria-label="Replay position">
+      </div>
+      <label class="inline" for="cam">View
+        <select id="cam"></select>
+      </label>
+    </div>
+    <div class="layers" id="layers">
+      <label><input type="checkbox" id="l-foot" checked> Sensor footprints</label>
+      <label><input type="checkbox" id="l-route" checked> Planned routes</label>
+      <label><input type="checkbox" id="l-radio" checked> Radio links</label>
+      <label><input type="checkbox" id="l-trail" checked> Trails</label>
+      <label><input type="checkbox" id="l-tags" checked> Labels</label>
+      <label class="inline" for="l-ground">Ground
+        <select id="l-ground">
+          <option value="fog">Time since seen</option>
+          <option value="coverage">Coverage</option>
+          <option value="none">Plain forest</option>
+        </select>
+      </label>
+    </div>
+  </main>
+
+  <aside class="panel" aria-live="off">
+    <section class="readouts">
+      <div class="stat"><span class="k">Step</span><span class="v" id="s-step">0</span> <span class="u" id="s-steps">/ 0</span></div>
+      <div class="stat" id="s-cov"><span class="k">Coverage</span><span class="v" id="s-cov-v">0%</span><div class="bar"><span id="s-cov-b"></span></div></div>
+      <div class="stat" id="s-fresh"><span class="k" id="s-fresh-k">Seen in last 100 steps</span><span class="v" id="s-fresh-v">0%</span><div class="bar"><span id="s-fresh-b"></span></div></div>
+      <div class="stat" id="s-inc"><span class="k" id="s-inc-k">Targets found</span><span class="v" id="s-inc-v">0</span> <span class="u" id="s-inc-u"></span></div>
+    </section>
+    <section>
+      <h2>Drones</h2>
+      <ol class="drones" id="drones"></ol>
+      <p class="fleet" id="fleet"></p>
+    </section>
+    <section id="inc-section">
+      <h2>Incidents</h2>
+      <p class="summary" id="inc-summary"></p>
+      <ul class="incidents" id="incidents"></ul>
+    </section>
+    <section>
+      <h2>Event log</h2>
+      <ol class="log" id="log"></ol>
+    </section>
+    <p class="note">Replays recordings of the trained MADDPG policy and the mission controller around it. Fires and intruders are hidden from the drones until they come into sensor range; the faded "?" marks show where they are before that.</p>
+  </aside>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="episodes/index.js"></script>
+<script>
+(() => {
+'use strict';
+const $ = (id) => document.getElementById(id);
+const UAV_HEX = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'];
+const MODE = { EXPLORE: 0, RETURN: 1, DOCKED: 2, STRANDED: 3, TRACK: 4 };
+const CONTROL = { policy: ['Policy', 'AI', '--canopy'], planner: ['Planner', 'PL', '--plan'], return: ['Return', 'RTH', '--signal'],
+                  docked: ['Docked', '', '--muted'], stranded: ['Lost', '', '--danger'], track: ['Tracking', 'TRK', '--track'] };
+const SPEEDS = [1, 2, 5, 10, 15, 30, 60, 120];
+const ALT = 3.2, TRAIL = 60, PIN_FRAMES = 80, FLASH = 12, ROUTE_LEN = 30, PX = 10;
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+// ------------------------------------------------------------------ renderer and scene
+const canvas = $('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+const scene = new THREE.Scene();
+const SKY = new THREE.Color('#08100c');
+scene.background = SKY;
+scene.fog = new THREE.Fog(SKY, 75, 170);
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 600);
+const controls = new THREE.OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI * 0.47;
+controls.minDistance = 6;
+controls.maxDistance = 150;
+scene.add(new THREE.HemisphereLight(0xc4d8e4, 0x18261c, 0.55));
+const sun = new THREE.DirectionalLight(0xffe0b0, 0.85);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -38, right: 38, top: 38, bottom: -38, near: 1, far: 180 });
+sun.shadow.bias = -0.0008;
+scene.add(sun, sun.target);
+let world = new THREE.Group();
+scene.add(world);
+
+const viewport = $('viewport');
+function resize() {
+  const w = viewport.clientWidth, h = viewport.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / Math.max(1, h);
+  camera.updateProjectionMatrix();
+  drawTimeline();
+}
+new ResizeObserver(resize).observe(viewport);
+
+// ------------------------------------------------------------------ episode data
+function decode(raw) {
+  const N = raw.grid, T = raw.frames, n = raw.nUav;
+  const ep = { raw, N, T, n, kind: raw.kind };
+  ep.obst = Uint8Array.from(raw.obstacles, (ch) => ch === '1');
+  ep.pos = Float32Array.from(raw.pos, (v) => v / 100);                  // ((t * n + u) * 2) -> row, col
+  ep.active = Uint8Array.from(raw.active, (ch) => ch === '1');
+  ep.mode = raw.mode ? Uint8Array.from(raw.mode, Number) : null;
+  ep.control = raw.control ? Uint8Array.from(raw.control, Number) : null;
+  ep.controlName = {};
+  for (const [name, code] of Object.entries(raw.controlCodes || {})) ep.controlName[code] = name;
+  ep.flying = (t, u) => ep.active[t * n + u] === 1 && (!ep.mode || ep.mode[t * n + u] !== MODE.DOCKED);
+
+  // heading of each drone: direction of its last move
+  ep.heading = new Float32Array(T * n);
+  for (let u = 0; u < n; u++) {
+    let h = Math.PI / 4;
+    for (let t = 0; t < T; t++) {
+      if (t > 0) {
+        const dr = ep.pos[(t * n + u) * 2] - ep.pos[((t - 1) * n + u) * 2];
+        const dc = ep.pos[(t * n + u) * 2 + 1] - ep.pos[((t - 1) * n + u) * 2 + 1];
+        if (Math.hypot(dr, dc) > 1e-4) h = Math.atan2(-dr, dc);           // yaw about +y, nose along +x
+      }
+      ep.heading[t * n + u] = h;
+    }
+  }
+
+  // when each cell was last inside a flying drone's footprint (same circle as the environment)
+  const r = raw.obsRadius, offs = [];
+  for (let dx = -r; dx <= r; dx++) for (let dy = -r; dy <= r; dy++) if (dx * dx + dy * dy <= r * r) offs.push([dx, dy]);
+  const cur = new Int16Array(N * N).fill(-1);
+  ep.lastSeen = new Int16Array(T * N * N);
+  for (let t = 0; t < T; t++) {
+    for (let u = 0; u < n; u++) {
+      if (!ep.flying(t, u)) continue;
+      const gx = Math.floor(clamp(ep.pos[(t * n + u) * 2], 0, N - 1)), gy = Math.floor(clamp(ep.pos[(t * n + u) * 2 + 1], 0, N - 1));
+      for (const [dx, dy] of offs) {
+        const x = gx + dx, y = gy + dy;
+        if (x >= 0 && x < N && y >= 0 && y < N) cur[x * N + y] = t;
+      }
+    }
+    ep.lastSeen.set(cur, t * N * N);
+  }
+
+  ep.fixes = new Map();                                                  // frame -> [[u, ask_r, ask_c, flown_r, flown_c]]
+  for (const [t, u, ar, ac, fr, fc] of raw.fixes || []) {
+    if (!ep.fixes.has(t)) ep.fixes.set(t, []);
+    ep.fixes.get(t).push([u, ar / 100, ac / 100, fr / 100, fc / 100]);
+  }
+  ep.lastFix = new Int32Array(T * n).fill(-1);
+  for (let t = 0; t < T; t++) for (let u = 0; u < n; u++) {
+    const here = (ep.fixes.get(t) || []).some((f) => f[0] === u);
+    ep.lastFix[t * n + u] = here ? t : (t > 0 ? ep.lastFix[(t - 1) * n + u] : -1);
+  }
+
+  ep.events = (raw.events || []).map((e, k) => ({ ...e, id: k }));
+  ep.track = new Int16Array(T * n).fill(-1);
+  (raw.tracks || []).forEach((list, u) => list.forEach(([s, e, k]) => { for (let t = s; t <= e; t++) ep.track[t * n + u] = k; }));
+  ep.logFrames = raw.log.map((l) => l[0]);
+  return ep;
+}
+
+const P = (ep, t, u) => [ep.pos[(t * ep.n + u) * 2], ep.pos[(t * ep.n + u) * 2 + 1]];
+function lerpPos(ep, F, u) {
+  const t0 = Math.floor(F), t1 = Math.min(t0 + 1, ep.T - 1), a = F - t0;
+  const [r0, c0] = P(ep, t0, u), [r1, c1] = P(ep, t1, u);
+  return [r0 + (r1 - r0) * a, c0 + (c1 - c0) * a];
+}
+function eventPos(e, F) {
+  if (e.kind === 'fire') return [e.pos[0] / 100, e.pos[1] / 100];
+  const i = clamp(F - e.spawn, 0, e.path.length / 2 - 1), i0 = Math.floor(i), i1 = Math.min(i0 + 1, e.path.length / 2 - 1), a = i - i0;
+  return [(e.path[i0 * 2] + (e.path[i1 * 2] - e.path[i0 * 2]) * a) / 100, (e.path[i0 * 2 + 1] + (e.path[i1 * 2 + 1] - e.path[i0 * 2 + 1]) * a) / 100];
+}
+const fireRadius = (e, t) => e.radius[clamp(t - e.spawn, 0, e.radius.length - 1)] / 100;
+const known = (t, x) => x >= 0 && x <= t;
+const goalOf = (t, u) => (ep.raw.goal ? ep.raw.goal[Math.min(t + 1, ep.T - 1) * ep.n + u] : -1);
+
+// planned routes: the corner-free shortest-path field the planner follows (as planning/safety.py)
+const SQ2 = Math.SQRT2;
+const NB = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, SQ2], [1, -1, SQ2], [-1, 1, SQ2], [-1, -1, SQ2]];
+function distanceField(ep, src) {
+  const N = ep.N, dist = new Float32Array(N * N).fill(Infinity), heap = [];
+  const push = (d, i) => { heap.push([d, i]); let k = heap.length - 1; while (k > 0) { const p = (k - 1) >> 1; if (heap[p][0] <= heap[k][0]) break; [heap[p], heap[k]] = [heap[k], heap[p]]; k = p; } };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let k = 0; for (;;) { const l = 2 * k + 1, r = l + 1; let m = k; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === k) break; [heap[m], heap[k]] = [heap[k], heap[m]]; k = m; } } return top; };
+  dist[src] = 0; push(0, src);
+  while (heap.length) {
+    const [d, i] = pop();
+    if (d > dist[i]) continue;
+    const x = Math.floor(i / N), y = i % N;
+    for (const [dx, dy, c] of NB) {
+      const a = x + dx, b = y + dy;
+      if (a < 0 || a >= N || b < 0 || b >= N || ep.obst[a * N + b]) continue;
+      if (dx && dy && (ep.obst[(x + dx) * N + y] || ep.obst[x * N + y + dy])) continue;
+      if (d + c < dist[a * N + b]) { dist[a * N + b] = d + c; push(d + c, a * N + b); }
+    }
+  }
+  return dist;
+}
+function routeCells(ep, goal, start) {
+  ep.fields = ep.fields || new Map();
+  if (!ep.fields.has(goal)) ep.fields.set(goal, distanceField(ep, goal));
+  const f = ep.fields.get(goal), N = ep.N, path = [start];
+  let cur = start;
+  for (let s = 0; s < ROUTE_LEN; s++) {
+    if (!isFinite(f[cur]) || f[cur] === 0) break;
+    let best = -1, bv = f[cur];
+    const x = Math.floor(cur / N), y = cur % N;
+    for (const [dx, dy] of NB) {
+      const a = x + dx, b = y + dy;
+      if (a >= 0 && a < N && b >= 0 && b < N && f[a * N + b] < bv - 1e-6) { best = a * N + b; bv = f[best]; }
+    }
+    if (best < 0) break;
+    path.push(best); cur = best;
+  }
+  return path;
+}
+
+// ------------------------------------------------------------------ building the world
+// world x = grid column, world z = grid row, y = up; one cell = one unit
+let ep = null, objs = null;
+const disposeAll = (g) => g.traverse((o) => {
+  if (o.geometry) o.geometry.dispose();
+  const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
+  mats.forEach((m) => { if (m.map) m.map.dispose(); m.dispose(); });
+});
+
+function radialTexture(inner, outer) {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d'), grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, inner); grad.addColorStop(1, outer);
+  g.fillStyle = grad; g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+}
+function padTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  g.fillStyle = '#1d2621'; g.beginPath(); g.arc(64, 64, 62, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = '#f0cf4a'; g.lineWidth = 6; g.beginPath(); g.arc(64, 64, 54, 0, Math.PI * 2); g.stroke();
+  g.fillStyle = '#e3ebe5'; g.font = 'bold 64px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('H', 64, 68);
+  return new THREE.CanvasTexture(c);
+}
+
+function groundBase(ep) {
+  const N = ep.N, c = document.createElement('canvas'); c.width = c.height = N * PX;
+  const g = c.getContext('2d'), rnd = mulberry32(ep.raw.seed * 7 + 3);
+  g.fillStyle = '#1f3d29'; g.fillRect(0, 0, c.width, c.height);
+  for (let i = 0; i < 2200; i++) {                                         // soft patches of moss and dry grass
+    const x = rnd() * c.width, y = rnd() * c.height, r = 6 + rnd() * 34;
+    const dry = rnd() < 0.3;
+    const grad = g.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, dry ? 'rgba(92,98,52,0.16)' : (rnd() < 0.5 ? 'rgba(46,92,58,0.18)' : 'rgba(10,26,16,0.2)'));
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = grad; g.fillRect(x - r, y - r, 2 * r, 2 * r);
+  }
+  for (let i = 0; i < N * N; i++) if (ep.obst[i]) {                        // forest floor under the trees
+    g.fillStyle = 'rgba(8,20,12,0.55)';
+    g.fillRect((i % N) * PX - 2, Math.floor(i / N) * PX - 2, PX + 4, PX + 4);
+  }
+  return c;
+}
+
+function makeDrone(hex) {
+  const color = new THREE.Color(hex);
+  const root = new THREE.Group(), yaw = new THREE.Group(), tilt = new THREE.Group();
+  root.add(yaw); yaw.add(tilt);
+  const dark = new THREE.MeshStandardMaterial({ color: 0x1c232b, roughness: 0.45, metalness: 0.35 });
+  const paint = new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.2, emissive: color, emissiveIntensity: 0.25 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.13, 0.46), dark);
+  const top = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.05, 0.34), paint); top.position.y = 0.09;
+  tilt.add(body, top);
+  for (const a of [Math.PI / 4, -Math.PI / 4]) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.04, 0.07), dark); arm.rotation.y = a; tilt.add(arm);
+  }
+  const rotors = [];
+  const discMat = new THREE.MeshBasicMaterial({ color: 0xd6e2ec, transparent: true, opacity: 0.22, depthWrite: false });
+  for (const [x, z] of [[0.35, 0.35], [0.35, -0.35], [-0.35, 0.35], [-0.35, -0.35]]) {
+    const hub = new THREE.Group(); hub.position.set(x, 0.07, z);
+    hub.add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.01, 18), discMat));
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.012, 0.05), paint); blade.position.y = 0.01;
+    hub.add(blade); tilt.add(hub); rotors.push(blade);
+  }
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  nose.position.set(0.27, 0.02, 0); tilt.add(nose);
+  root.scale.setScalar(1.8);
+  root.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  return { root, yaw, tilt, rotors, paint, color };
+}
+
+function buildWorld() {
+  scene.remove(world); disposeAll(world);
+  world = new THREE.Group(); scene.add(world);
+  const N = ep.N, n = ep.n, rnd = mulberry32(ep.raw.seed + 11);
+  const o = { drones: [], targets: [], incidents: [], tags: [] };
+
+  // ground: a canvas texture redrawn when the frame changes (coverage / time since seen)
+  o.base = groundBase(ep);
+  o.groundCanvas = document.createElement('canvas'); o.groundCanvas.width = o.groundCanvas.height = N * PX;
+  o.small = document.createElement('canvas'); o.small.width = o.small.height = N;
+  o.groundTex = new THREE.CanvasTexture(o.groundCanvas);
+  o.groundTex.anisotropy = 4;
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(N, N), new THREE.MeshStandardMaterial({ map: o.groundTex, roughness: 1 }));
+  ground.rotation.x = -Math.PI / 2; ground.position.set(N / 2, 0, N / 2); ground.receiveShadow = true;
+  const outside = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), new THREE.MeshStandardMaterial({ color: 0x0f1b13, roughness: 1 }));
+  outside.rotation.x = -Math.PI / 2; outside.position.set(N / 2, -0.05, N / 2);
+  const corners = [[0, 0], [N, 0], [N, N], [0, N]].map(([x, z]) => new THREE.Vector3(x, 0.06, z));
+  const fence = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(corners),
+    new THREE.LineBasicMaterial({ color: 0xf0cf4a, transparent: true, opacity: 0.35 }));
+  world.add(ground, outside, fence);
+
+  // trees: two low-poly conifers per obstacle cell
+  const cells = []; for (let i = 0; i < N * N; i++) if (ep.obst[i]) cells.push(i);
+  const count = cells.length * 2;
+  const crown = new THREE.ConeGeometry(0.6, 1.7, 7); crown.translate(0, 1.25, 0);
+  const trunk = new THREE.CylinderGeometry(0.08, 0.11, 0.5, 6); trunk.translate(0, 0.25, 0);
+  const crowns = new THREE.InstancedMesh(crown, new THREE.MeshStandardMaterial({ roughness: 0.85, flatShading: true }), count);
+  const trunks = new THREE.InstancedMesh(trunk, new THREE.MeshStandardMaterial({ color: 0x4a3322, roughness: 1 }), count);
+  const greens = ['#1f4f2c', '#2a6136', '#1a4426', '#326b3b', '#24502c'];
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), col = new THREE.Color();
+  cells.forEach((i, k) => {
+    const r = Math.floor(i / N), c = i % N;
+    for (let j = 0; j < 2; j++) {
+      const h = 0.75 + rnd() * 0.55, w = 0.85 + rnd() * 0.35;
+      p.set(c + 0.5 + (rnd() - 0.5) * 0.55, 0, r + 0.5 + (rnd() - 0.5) * 0.55);
+      q.setFromAxisAngle(up, rnd() * Math.PI * 2); s.set(w, h, w); m.compose(p, q, s);
+      crowns.setMatrixAt(k * 2 + j, m); trunks.setMatrixAt(k * 2 + j, m);
+      col.set(greens[Math.floor(rnd() * greens.length)]); col.offsetHSL(0, 0, (rnd() - 0.5) * 0.05);
+      crowns.setColorAt(k * 2 + j, col);
+    }
+  });
+  crowns.castShadow = crowns.receiveShadow = trunks.castShadow = true;
+  world.add(crowns, trunks);
+
+  // base station: landing pads, hangar and radio mast
+  const pads = ep.raw.pads || [[1, 1]];
+  const padMat = new THREE.MeshBasicMaterial({ map: padTexture(), transparent: true });
+  o.pads = pads;
+  for (const [r, c] of pads) {
+    const pad = new THREE.Mesh(new THREE.CircleGeometry(0.46, 28), padMat);
+    pad.rotation.x = -Math.PI / 2; pad.position.set(c + 0.5, 0.04, r + 0.5); world.add(pad);
+  }
+  const hangar = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.6, 0.9), new THREE.MeshStandardMaterial({ color: 0x9aa59e, roughness: 0.7 }));
+  hangar.position.set(0.45, 0.3, 0.45); hangar.castShadow = true;
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.06, 3, 6), new THREE.MeshStandardMaterial({ color: 0xc9d2cc }));
+  mast.position.set(0.45, 1.8, 0.45);
+  o.beacon = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff4d4d }));
+  o.beacon.position.set(0.45, 3.35, 0.45);
+  world.add(hangar, mast, o.beacon);
+  o.mastTop = new THREE.Vector3(0.45, 3.35, 0.45);
+
+  // the environment's ten targets (placed at the start; three of them move)
+  const types = ep.raw.targets.types;
+  const tColor = { animal: 0x4aa3ff, fire: 0xe4572e, poi: 0xafb7bf };
+  types.forEach((type) => {
+    const g = new THREE.Group();
+    const geo = type === 'animal' ? new THREE.SphereGeometry(0.26, 14, 10) : type === 'fire' ? new THREE.ConeGeometry(0.26, 0.6, 8) : new THREE.OctahedronGeometry(0.3);
+    const mat = new THREE.MeshStandardMaterial({ color: tColor[type], emissive: tColor[type], emissiveIntensity: 0.15, roughness: 0.5 });
+    const mesh = new THREE.Mesh(geo, mat); mesh.position.y = 0.45; mesh.castShadow = true;
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.6, 32), new THREE.MeshBasicMaterial({ color: tColor[type], transparent: true, opacity: 0.8, depthWrite: false }));
+    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.05;
+    g.add(mesh, ring); world.add(g);
+    o.targets.push({ g, mesh, mat, ring, type });
+  });
+
+  // drones, and everything drawn per drone
+  const footGeo = new THREE.CircleGeometry(ep.raw.obsRadius + 0.5, 56), footEdge = new THREE.RingGeometry(ep.raw.obsRadius + 0.38, ep.raw.obsRadius + 0.5, 72);
+  for (let u = 0; u < n; u++) {
+    const hex = UAV_HEX[u % UAV_HEX.length], d = makeDrone(hex);
+    world.add(d.root);
+    const foot = new THREE.Group();
+    const fill = new THREE.Mesh(footGeo, new THREE.MeshBasicMaterial({ color: d.color, transparent: true, opacity: 0.1, depthWrite: false }));
+    const edge = new THREE.Mesh(footEdge, new THREE.MeshBasicMaterial({ color: d.color, transparent: true, opacity: 0.55, depthWrite: false }));
+    fill.rotation.x = edge.rotation.x = -Math.PI / 2; fill.position.y = 0.05; edge.position.y = 0.06;
+    const cone = new THREE.Mesh(new THREE.CylinderGeometry(0.15, ep.raw.obsRadius + 0.5, 1, 40, 1, true),
+      new THREE.MeshBasicMaterial({ color: d.color, transparent: true, opacity: 0.05, depthWrite: false, side: THREE.DoubleSide }));
+    foot.add(fill, edge); world.add(foot, cone);
+    const tether = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+      new THREE.LineBasicMaterial({ color: d.color, transparent: true, opacity: 0.35 }));
+    const trailGeo = new THREE.BufferGeometry(); trailGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array((TRAIL + 2) * 3), 3));
+    const trail = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({ color: d.color, transparent: true, opacity: 0.75 }));
+    const routeGeo = new THREE.BufferGeometry(); routeGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array((ROUTE_LEN + 2) * 3), 3));
+    const route = new THREE.Line(routeGeo, new THREE.LineDashedMaterial({ color: d.color, dashSize: 0.45, gapSize: 0.3, transparent: true, opacity: 0.95 }));
+    const goal = new THREE.Group();
+    const goalRing = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.58, 28), new THREE.MeshBasicMaterial({ color: d.color, depthWrite: false, transparent: true }));
+    goalRing.rotation.x = -Math.PI / 2; goalRing.position.y = 0.08;
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 2.4, 6), new THREE.MeshBasicMaterial({ color: d.color, transparent: true, opacity: 0.6 }));
+    beam.position.y = 1.2;
+    goal.add(goalRing, beam);
+    const trackRing = new THREE.Mesh(new THREE.RingGeometry(0.94, 1, 48, 1, 0, Math.PI * 1.6), new THREE.MeshBasicMaterial({ color: d.color, transparent: true, opacity: 0.95, depthWrite: false, side: THREE.DoubleSide }));
+    trackRing.rotation.x = -Math.PI / 2;
+    const flash = new THREE.Mesh(new THREE.TorusGeometry(1, 0.05, 6, 40), new THREE.MeshBasicMaterial({ color: 0xf0cf4a, transparent: true }));
+    flash.rotation.x = Math.PI / 2;
+    const ask = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 1, 0xff5050, 0.45, 0.3);
+    const flown = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 1, 0xf0cf4a, 0.45, 0.3);
+    world.add(tether, trail, route, goal, trackRing, flash, ask, flown);
+    const tag = document.createElement('div'); tag.className = 'tag'; tag.style.color = hex; $('labels').appendChild(tag);
+    o.drones.push({ ...d, foot, cone, tether, trail, route, goal, trackRing, flash, ask, flown, tag, routeKey: '' });
+  }
+
+  // radio links between flying drones and to the base mast
+  const radioGeo = new THREE.BufferGeometry();
+  radioGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(21 * 2 * 3), 3));
+  radioGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(21 * 2 * 3), 3));
+  o.radio = new THREE.LineSegments(radioGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9 }));
+  world.add(o.radio);
+
+  // fires and intruders
+  const smokeTex = radialTexture('rgba(170,170,170,0.8)', 'rgba(170,170,170,0)');
+  const glowTex = radialTexture('rgba(255,140,50,0.9)', 'rgba(255,90,20,0)');
+  for (const e of ep.events) {
+    const g = new THREE.Group(); g.visible = false; world.add(g);
+    const item = { e, g, mats: [] };
+    const mat = (m) => { m.userData.base = m.opacity; item.mats.push(m); return m; };
+    if (e.kind === 'fire') {
+      item.scorch = new THREE.Mesh(new THREE.CircleGeometry(1, 40), mat(new THREE.MeshBasicMaterial({ color: 0x24110a, transparent: true, opacity: 0.8, depthWrite: false })));
+      item.scorch.rotation.x = -Math.PI / 2; item.scorch.position.y = 0.07;
+      item.glow = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 2.4), mat(new THREE.MeshBasicMaterial({ map: glowTex, transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending })));
+      item.glow.rotation.x = -Math.PI / 2; item.glow.position.y = 0.09;
+      item.front = new THREE.Mesh(new THREE.RingGeometry(0.9, 1, 48), mat(new THREE.MeshBasicMaterial({ color: 0xff9a3c, transparent: true, opacity: 0.9, depthWrite: false })));
+      item.front.rotation.x = -Math.PI / 2; item.front.position.y = 0.1;
+      g.add(item.scorch, item.glow, item.front);
+      const fr = mulberry32(e.id * 97 + 5);
+      item.flames = [];
+      for (let j = 0; j < 10; j++) {
+        const fm = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.7, 6), mat(new THREE.MeshBasicMaterial({ color: j % 2 ? 0xffd25a : 0xff7a2f, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false })));
+        fm.userData = { ...fm.userData, ang: fr() * Math.PI * 2, rho: Math.sqrt(fr()), ph: fr() * 6 };
+        g.add(fm); item.flames.push(fm);
+      }
+      item.smoke = [];
+      for (let j = 0; j < 5; j++) {
+        const sp = new THREE.Sprite(mat(new THREE.SpriteMaterial({ map: smokeTex, transparent: true, opacity: 0.5, depthWrite: false })));
+        sp.userData.ph = j / 5 + fr() * 0.1; g.add(sp); item.smoke.push(sp);
+      }
+    } else {
+      const bodyMat = mat(new THREE.MeshStandardMaterial({ color: 0xc07cff, emissive: 0x5a2a8a, emissiveIntensity: 0.5, transparent: true, opacity: 1 }));
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 0.62, 10), bodyMat); body.position.y = 0.33;
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.14, 12, 10), bodyMat); head.position.y = 0.78;
+      body.castShadow = head.castShadow = true;
+      item.ring = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.6, 32), mat(new THREE.MeshBasicMaterial({ color: 0xc07cff, transparent: true, opacity: 0.9, depthWrite: false })));
+      item.ring.rotation.x = -Math.PI / 2; item.ring.position.y = 0.06;
+      g.add(body, head, item.ring);
+    }
+    const q = document.createElement('div'); q.className = 'tag'; q.style.color = 'var(--muted)'; q.textContent = '?'; $('labels').appendChild(q);
+    const pin = document.createElement('div'); pin.className = 'tag pin'; pin.style.color = e.kind === 'fire' ? 'var(--fire)' : 'var(--intruder)'; $('labels').appendChild(pin);
+    item.q = q; item.pin = pin;
+    o.incidents.push(item);
+  }
+  objs = o;
+  lastPanelFrame = -1; lastGroundKey = '';
+}
+
+// ------------------------------------------------------------------ per-frame update
+let F = 0, playing = true, speed = 15, lastPanelFrame = -1, lastGroundKey = '';
+const layer = { foot: true, route: true, radio: true, trail: true, tags: true, ground: 'fog' };
+const tmp = new THREE.Vector3();
+
+function drawGround(t) {
+  const key = `${t}|${layer.ground}`;
+  if (key === lastGroundKey) return;
+  lastGroundKey = key;
+  const N = ep.N, g = objs.groundCanvas.getContext('2d');
+  g.drawImage(objs.base, 0, 0);
+  if (layer.ground !== 'none') {
+    const s = objs.small.getContext('2d'), img = s.createImageData(N, N), ls = ep.lastSeen, off = t * N * N, W = ep.raw.freshWindow;
+    for (let i = 0; i < N * N; i++) {
+      const seen = ls[off + i];
+      let a;
+      if (layer.ground === 'fog') {
+        a = seen < 0 ? 0.84 : clamp((t - seen - 10) / (3 * W), 0, 1) * 0.6;
+        img.data.set([6, 10, 16, Math.round(a * 255)], i * 4);
+      } else {
+        img.data.set([95, 208, 138, seen >= 0 ? 70 : 0], i * 4);
+      }
+    }
+    s.putImageData(img, 0, 0);
+    g.imageSmoothingEnabled = layer.ground === 'fog';
+    g.drawImage(objs.small, 0, 0, N * PX, N * PX);
+  }
+  objs.groundTex.needsUpdate = true;
+}
+
+function setOpacity(item, k) { for (const m of item.mats) m.opacity = m.userData.base * k; }
+
+function project(el, x, y, z, w, h, show) {
+  if (!show) { el.style.display = 'none'; return; }
+  tmp.set(x, y, z).project(camera);
+  if (tmp.z > 1 || tmp.x < -1.1 || tmp.x > 1.1 || tmp.y < -1.1 || tmp.y > 1.1) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.style.transform = `translate(${((tmp.x + 1) / 2) * w}px, ${((1 - tmp.y) / 2) * h}px) translate(-50%, -100%)`;
+}
+
+function controlOf(t, u) {
+  if (ep.control) return ep.controlName[ep.control[t * ep.n + u]] || 'policy';
+  if (!ep.mode) return 'policy';
+  return ['', 'return', 'docked', 'stranded', 'track'][ep.mode[t * ep.n + u]] || '';
+}
+
+function update(dt, time) {
+  const t = Math.floor(F), n = ep.n, N = ep.N, a = F - t;
+  const w = viewport.clientWidth, h = viewport.clientHeight;
+  drawGround(t);
+  objs.beacon.visible = Math.floor(time * 1.5) % 2 === 0;
+
+  // targets
+  const tg = ep.raw.targets;
+  objs.targets.forEach((o, i) => {
+    let r = tg.start[i * 2], c = tg.start[i * 2 + 1];
+    const d = tg.dynamic.indexOf(i);
+    if (d >= 0) { r = tg.dynamicPos[(t * tg.dynamic.length + d) * 2]; c = tg.dynamicPos[(t * tg.dynamic.length + d) * 2 + 1]; }
+    o.g.position.set(c + 0.5, 0, r + 0.5);
+    const found = known(t, tg.found[i]);
+    o.mat.emissiveIntensity = found ? 0.6 : 0.12;
+    o.ring.material.opacity = found ? 0.85 : 0.25 + 0.25 * Math.sin(time * 4 + i);
+    o.ring.material.color.set(found ? 0xffffff : o.mat.color);
+    o.mesh.rotation.y = time * 0.8 + i;
+  });
+
+  // drones
+  const flying = [], nodes = [objs.mastTop];
+  objs.drones.forEach((d, u) => {
+    const [row, col] = lerpPos(ep, F, u);
+    const m = ep.mode ? ep.mode[t * n + u] : MODE.EXPLORE;
+    const active = ep.active[t * n + u] === 1;
+    const fly = active && m !== MODE.DOCKED;
+    const yaw = ep.heading[t * n + u] + (((ep.heading[Math.min(t + 1, ep.T - 1) * n + u] - ep.heading[t * n + u] + Math.PI * 3) % (Math.PI * 2)) - Math.PI) * Math.min(1, a * 3);
+    const [r1, c1] = P(ep, Math.min(t + 1, ep.T - 1), u), [r0, c0] = P(ep, t, u);
+    const moving = Math.hypot(r1 - r0, c1 - c0);
+    const y = fly ? ALT : 0.12;
+    d.root.position.set(col, y, row);
+    d.root.scale.setScalar(fly ? 1.8 : 1.2);
+    d.yaw.rotation.y = yaw;
+    d.tilt.rotation.z = fly ? -0.22 * moving : 0;
+    d.tilt.rotation.x = !active && m === MODE.STRANDED ? 0.5 : 0;
+    if (fly && !reduceMotion) d.rotors.forEach((b) => { b.rotation.y += dt * 38; });
+    d.paint.emissiveIntensity = fly ? 0.3 : 0.05;
+    if (fly) { flying.push(u); nodes.push(new THREE.Vector3(col, ALT, row)); }
+
+    const gx = Math.floor(clamp(row, 0, N - 1)), gy = Math.floor(clamp(col, 0, N - 1));
+    d.foot.visible = d.cone.visible = fly && layer.foot;
+    d.foot.position.set(gy + 0.5, 0, gx + 0.5);
+    d.cone.scale.set(1, ALT, 1);
+    d.cone.position.set(gy + 0.5, ALT / 2 - 0.1, gx + 0.5);
+    d.tether.visible = fly;
+    d.tether.geometry.attributes.position.setXYZ(0, col, ALT - 0.15, row);
+    d.tether.geometry.attributes.position.setXYZ(1, col, 0.05, row);
+    d.tether.geometry.attributes.position.needsUpdate = true;
+
+    // trail: the last 60 steps, ending at the interpolated position
+    d.trail.visible = layer.trail;
+    if (layer.trail) {
+      const lo = Math.max(0, t - TRAIL), arr = d.trail.geometry.attributes.position;
+      let k = 0;
+      for (let s = lo; s <= t; s++) { const [rr, cc] = P(ep, s, u); arr.setXYZ(k++, cc, ep.flying(s, u) ? ALT : 0.15, rr); }
+      arr.setXYZ(k++, col, y, row);
+      arr.needsUpdate = true; d.trail.geometry.setDrawRange(0, k);
+      d.trail.geometry.computeBoundingSphere();
+    }
+
+    // planned route and target
+    const goal = goalOf(t, u);
+    const showRoute = layer.route && goal >= 0 && active && m !== MODE.DOCKED;
+    d.route.visible = d.goal.visible = showRoute;
+    if (showRoute) {
+      const key = `${goal}|${gx * N + gy}`;
+      if (key !== d.routeKey) {
+        d.routeKey = key;
+        const cells = routeCells(ep, goal, gx * N + gy), arr = d.route.geometry.attributes.position;
+        cells.forEach((cell, k) => arr.setXYZ(k, (cell % N) + 0.5, 0.14, Math.floor(cell / N) + 0.5));
+        d.routeCount = cells.length;
+        arr.needsUpdate = true;
+      }
+      d.route.geometry.attributes.position.setXYZ(0, col, 0.14, row);
+      d.route.geometry.attributes.position.needsUpdate = true;
+      d.route.geometry.setDrawRange(0, d.routeCount);
+      d.route.computeLineDistances();
+      d.route.geometry.computeBoundingSphere();
+      d.goal.position.set((goal % N) + 0.5, 0, Math.floor(goal / N) + 0.5);
+      d.goal.children[1].visible = m !== MODE.RETURN;
+    }
+
+    // tracking an incident
+    const k = ep.track[t * n + u];
+    d.trackRing.visible = k >= 0;
+    if (k >= 0) {
+      const e = ep.events[k], [er, ec] = eventPos(e, F);
+      const rad = (e.kind === 'fire' ? fireRadius(e, t) : 0) + 1.3;
+      d.trackRing.position.set(ec, 0.12, er); d.trackRing.scale.setScalar(rad);
+      d.trackRing.rotation.z = time * 1.6;
+    }
+
+    // safety correction: what the mission layer asked for (red) and what was flown (yellow)
+    const g = ep.lastFix[t * n + u], fresh = g >= 1 && t - g < FLASH;
+    d.flash.visible = d.ask.visible = d.flown.visible = fresh;
+    if (fresh) {
+      const kf = 1 - (t - g) / FLASH;
+      const fx = ep.fixes.get(g).find((f) => f[0] === u), [sr, sc] = P(ep, g - 1, u);
+      d.flash.position.set(col, ALT, row); d.flash.scale.setScalar(1.2 + (1 - kf) * 1.2); d.flash.material.opacity = kf;
+      for (const [arrow, vr, vc] of [[d.ask, fx[1], fx[2]], [d.flown, fx[3], fx[4]]]) {
+        const len = Math.hypot(vr, vc);
+        arrow.visible = len > 0.05;
+        arrow.position.set(sc, ALT + 0.4, sr);
+        if (len > 0.05) { arrow.setDirection(tmp.set(vc / len, 0, vr / len)); arrow.setLength(len * 2.5 + 0.5, 0.45, 0.3); }
+      }
+    }
+
+    // tag: name, and who is flying it
+    const ctl = controlOf(t, u), st = CONTROL[ctl];
+    d.tag.innerHTML = `<b>UAV${u}</b>${st && st[1] ? ` <span style="color:var(${st[2]})">${st[1]}</span>` : ''}`;
+    project(d.tag, col, y + 1.1, row, w, h, layer.tags && active);
+  });
+
+  // radio: links within range, and which drones reach the base by relay
+  const R = ep.raw.commRadius, pos = objs.radio.geometry.attributes.position, colr = objs.radio.geometry.attributes.color;
+  let seg = 0, links = 0;
+  const adj = nodes.map(() => []);
+  for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+    const dd = Math.hypot(nodes[i].x - nodes[j].x, nodes[i].z - nodes[j].z);
+    if (dd > R) continue;
+    adj[i].push(j); adj[j].push(i); if (i > 0) links++;
+    const k = 0.35 + 0.65 * (1 - dd / R);
+    pos.setXYZ(seg * 2, nodes[i].x, nodes[i].y, nodes[i].z); pos.setXYZ(seg * 2 + 1, nodes[j].x, nodes[j].y, nodes[j].z);
+    for (const v of [seg * 2, seg * 2 + 1]) colr.setXYZ(v, 0.5 * k, 0.82 * k, 0.95 * k);
+    seg++;
+  }
+  pos.needsUpdate = colr.needsUpdate = true;
+  objs.radio.geometry.setDrawRange(0, seg * 2);
+  objs.radio.geometry.computeBoundingSphere();
+  objs.radio.visible = layer.radio;
+  const reach = new Set([0]), stack = [0];
+  while (stack.length) for (const b of adj[stack.pop()]) if (!reach.has(b)) { reach.add(b); stack.push(b); }
+  radioState = { links, reach: reach.size - 1, flying: flying.length };
+
+  // incidents
+  const watched = new Set(); for (let u = 0; u < n; u++) if (ep.track[t * n + u] >= 0) watched.add(ep.track[t * n + u]);
+  for (const item of objs.incidents) {
+    const e = item.e;
+    if (e.spawn > t) { item.g.visible = false; item.q.style.display = item.pin.style.display = 'none'; continue; }
+    item.g.visible = true;
+    const [er, ec] = eventPos(e, F);
+    item.g.position.set(ec, 0, er);
+    const seen = known(t, e.detected), reported = known(t, e.confirmed) && !watched.has(e.id);
+    setOpacity(item, reported ? 0.3 : seen ? 1 : 0.42);
+    if (e.kind === 'fire') {
+      const rad = Math.max(fireRadius(e, t), 0.35);
+      item.scorch.scale.setScalar(rad + 0.25);
+      item.glow.scale.setScalar(rad * 0.95 + 0.4);
+      item.front.scale.setScalar(rad + 0.1);
+      const live = 2 + Math.floor(rad * 2);
+      item.flames.forEach((fm, j) => {
+        fm.visible = !reported && j < live;
+        const u = fm.userData, fl = reduceMotion ? 1 : 0.75 + 0.35 * Math.sin(time * 9 + u.ph);
+        fm.position.set(Math.cos(u.ang) * u.rho * rad * 0.75, 0.35 * fl, Math.sin(u.ang) * u.rho * rad * 0.75);
+        fm.scale.set(1, fl * (0.8 + rad * 0.15), 1);
+      });
+      item.smoke.forEach((sp) => {
+        sp.visible = !reported;
+        const ph = reduceMotion ? sp.userData.ph : (time * 0.18 + sp.userData.ph) % 1, grow = 1 + rad / 3;
+        sp.position.set(ph * 2.2 * grow, 0.8 + ph * 6 * grow, -ph * 1.2 * grow);
+        sp.scale.setScalar((0.8 + ph * 2.4) * grow);
+        sp.material.opacity = sp.material.userData.base * (1 - ph) * (seen ? 1 : 0.42);
+      });
+    } else {
+      item.ring.visible = seen && !reported;
+      item.ring.scale.setScalar(1 + 0.25 * Math.sin(time * 5));
+    }
+    project(item.q, ec, 1.6, er, w, h, layer.tags && !seen);
+    const showPin = seen && (t - e.detected <= PIN_FRAMES || watched.has(e.id));
+    if (showPin) {
+      const conf = known(t, e.confirmed);
+      item.pin.innerHTML = `<b>${e.kind} #${e.id}</b> · t=${e.detected} · (${Math.floor(er)},${Math.floor(ec)})${conf ? ' · confirmed' : ''}`;
+    }
+    project(item.pin, ec, 2.6, er, w, h, layer.tags && showPin);
+  }
+
+  if (t !== lastPanelFrame) { updatePanel(t); lastPanelFrame = t; }
+}
+
+// ------------------------------------------------------------------ panel
+let radioState = { links: 0, reach: 0, flying: 0 };
+const pct = (v) => `${(v * 100).toFixed(v >= 0.9995 ? 0 : 1)}%`;
+function battColour(f) { return f > 0.5 ? 'var(--canopy)' : f > 0.3 ? 'var(--plan)' : 'var(--danger)'; }
+
+function statusOf(t, u) {
+  const n = ep.n, frac = ep.raw.battery[t * n + u] / 100, m = ep.mode ? ep.mode[t * n + u] : null;
+  if (m === MODE.STRANDED) return ['Lost', '--danger'];
+  if (m === MODE.DOCKED) return frac >= 0.999 ? ['Docked', '--muted'] : [ep.raw.packs ? 'Swapping battery' : 'Charging', '--signal'];
+  if (m === MODE.RETURN) return ['Returning to base', '--signal'];
+  if (m === MODE.TRACK) {
+    const k = ep.track[t * n + u], e = ep.events[k];
+    return [known(t, e.confirmed) ? `Watching ${e.kind} #${k}` : `Confirming ${e.kind} #${k}`, '--track'];
+  }
+  if (!ep.active[t * n + u]) return ['Inactive', '--muted'];
+  const goal = goalOf(t, u);
+  if (goal >= 0) return [`Heading to (${Math.floor(goal / ep.N)}, ${goal % ep.N})`, '--plan'];
+  return [ep.kind === 'patrol' ? 'Patrolling' : 'Exploring', '--canopy'];
+}
+
+function updatePanel(t) {
+  const n = ep.n, T = ep.T;
+  $('hud-step').textContent = `Step ${t}`;
+  $('s-step').textContent = t; $('s-steps').textContent = `/ ${T - 1}`;
+  const cov = ep.raw.coverage[t] / 1000, fresh = ep.raw.fresh[t] / 1000;
+  $('s-cov-v').textContent = pct(cov); $('s-cov-b').style.width = `${cov * 100}%`;
+  $('s-fresh-v').textContent = pct(fresh); $('s-fresh-b').style.width = `${fresh * 100}%`;
+  if (ep.events.length) {
+    const started = ep.events.filter((e) => e.spawn <= t), found = started.filter((e) => known(t, e.detected));
+    const delays = found.map((e) => e.detected - e.spawn);
+    $('s-inc-k').textContent = 'Incidents found';
+    $('s-inc-v').textContent = `${found.length}`; $('s-inc-u').textContent = `of ${started.length} started`;
+    $('inc-summary').textContent = delays.length
+      ? `Time to detect: mean ${Math.round(delays.reduce((x, y) => x + y, 0) / delays.length)} steps, worst ${Math.max(...delays)}.`
+      : 'Nothing detected yet.';
+    const tracked = new Map(); for (let u = 0; u < n; u++) if (ep.track[t * n + u] >= 0) tracked.set(ep.track[t * n + u], u);
+    const hidden = started.filter((e) => !known(t, e.detected));
+    const done = started.filter((e) => known(t, e.detected) && !tracked.has(e.id)).sort((x, y) => y.detected - x.detected);
+    const rows = [...[...tracked.keys()].sort((x, y) => x - y).map((k) => ep.events[k]), ...hidden, ...done].slice(0, 4);
+    $('incidents').innerHTML = rows.map((e) => {
+      const [er, ec] = eventPos(e, t), u = tracked.get(e.id);
+      let st;
+      if (!known(t, e.detected)) st = `Undetected for ${t - e.spawn} steps. The swarm does not know yet.`;
+      else if (u !== undefined && !known(t, e.confirmed)) st = `Found after ${e.detected - e.spawn} steps. UAV${u} is flying in to confirm.`;
+      else if (u !== undefined) st = `Confirmed by UAV${u}, which is watching it.`;
+      else st = `Found after ${e.detected - e.spawn} steps, confirmed and reported.`;
+      const colour = e.kind === 'fire' ? 'var(--fire)' : 'var(--intruder)';
+      return `<li class="incident" style="color:${colour}"><span class="what">${e.kind} #${e.id} · (${Math.floor(er)}, ${Math.floor(ec)})</span><span class="state">${st}</span></li>`;
+    }).join('') || '<li class="note">No fires or intruders yet.</li>';
+  } else {
+    const found = ep.raw.targets.found.filter((f) => known(t, f)).length;
+    $('s-inc-k').textContent = 'Targets found';
+    $('s-inc-v').textContent = `${found}`; $('s-inc-u').textContent = `of ${ep.raw.targets.types.length}`;
+  }
+
+  $('drones').innerHTML = Array.from({ length: n }, (_, u) => {
+    const frac = ep.raw.battery[t * n + u] / 100, ctl = CONTROL[controlOf(t, u)] || ['Exploring', '', '--muted'];
+    const [st, sc] = statusOf(t, u);
+    return `<li class="drone"><span class="name"><i style="background:${UAV_HEX[u]}"></i>UAV${u}</span>
+      <span class="batt"><span><b style="width:${frac * 100}%;background:${battColour(frac)}"></b></span>${Math.round(frac * 100)}%</span>
+      <span class="pill" style="background:var(${ctl[2]})">${ctl[0]}</span>
+      <span class="status" style="color:var(${sc})">${st}</span></li>`;
+  }).join('');
+  let fleet = '';
+  if (ep.raw.packs) {
+    const k = ep.raw.nPacks;
+    fleet += `<span>Spare batteries <span class="packs">${Array.from({ length: k }, (_, j) => {
+      const f = ep.raw.packs[t * k + j] / 100;
+      return `<b><span style="width:${Math.max(0, f * 16 - 1)}px;background:${battColour(f)}"></span></b>`;
+    }).join('')}</span></span>`;
+  }
+  fleet += radioState.flying
+    ? `<span>Radio range ${ep.raw.commRadius} cells: ${radioState.links} drone link${radioState.links === 1 ? '' : 's'}, ${radioState.reach} of ${radioState.flying} flying drones reach the base</span>`
+    : '<span>No drones in the air</span>';
+  $('fleet').innerHTML = fleet;
+
+  let hi = 0, lo = ep.logFrames.length; while (hi < lo) { const mid = (hi + lo) >> 1; if (ep.logFrames[mid] <= t) hi = mid + 1; else lo = mid; }
+  $('log').innerHTML = ep.raw.log.slice(Math.max(0, hi - 12), hi).reverse()
+    .map(([f, txt, colour]) => `<li><time>t=${f}</time><span style="color:${colour}">${txt}</span></li>`).join('');
+  $('scrub').value = t;
+  drawTimeline();
+}
+
+// ------------------------------------------------------------------ timeline strip
+function drawTimeline() {
+  if (!ep) return;
+  const c = $('timeline'), dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
+  if (!w) return;
+  c.width = w * dpr; c.height = h * dpr;
+  const g = c.getContext('2d'); g.scale(dpr, dpr);
+  const span = Math.max(1, ep.T - 1), X = (f) => (f / span) * w, t = Math.floor(F);
+  g.fillStyle = css('--panel'); g.fillRect(0, 0, w, h);
+  if (ep.events.length) {
+    const lanes = 4, ends = Array(lanes).fill(-1e9), lh = h / lanes;
+    for (const e of ep.events) {
+      const end = Math.max(e.confirmed, e.detected) >= 0 ? Math.max(e.confirmed, e.detected) : span;
+      let lane = ends.findIndex((x) => x < e.spawn - 8); if (lane < 0) lane = ends.indexOf(Math.min(...ends));
+      ends[lane] = Math.max(ends[lane], end);
+      const y = lane * lh + lh / 2, colour = e.kind === 'fire' ? css('--fire') : css('--intruder');
+      g.globalAlpha = 0.4; g.strokeStyle = colour; g.lineWidth = 3;
+      g.beginPath(); g.moveTo(X(e.spawn), y); g.lineTo(Math.max(X(e.detected >= 0 ? e.detected : span), X(e.spawn) + 1), y); g.stroke();
+      if (e.detected >= 0) {
+        g.globalAlpha = 1; g.beginPath(); g.moveTo(X(e.detected), y); g.lineTo(Math.max(X(e.confirmed >= 0 ? e.confirmed : span), X(e.detected) + 1), y); g.stroke();
+      }
+    }
+  } else {
+    g.strokeStyle = css('--canopy'); g.lineWidth = 2; g.beginPath();
+    ep.raw.coverage.forEach((v, f) => { const y = h - 3 - (v / 1000) * (h - 6); f ? g.lineTo(X(f), y) : g.moveTo(X(f), y); });
+    g.stroke();
+  }
+  g.globalAlpha = 1;
+  for (const [f, , colour, mark] of ep.raw.log) if (mark && !ep.events.length) { g.fillStyle = colour; g.fillRect(X(f) - 1, 0, 2, 5); }
+  g.fillStyle = 'rgba(8,16,12,0.55)'; g.fillRect(X(t), 0, w - X(t), h);                // the future, dimmed
+  g.fillStyle = css('--text'); g.fillRect(X(t) - 1, 0, 2, h);
+}
+
+// ------------------------------------------------------------------ camera
+let camMode = 'orbit';
+function frameOverview() {
+  const N = ep.N;
+  controls.target.set(N / 2, 0, N / 2 + 1);
+  camera.position.set(N / 2 - 6, 44, N + 26);
+  controls.update();
+}
+function updateCamera(dt) {
+  const N = ep.N, k = 1 - Math.exp(-dt * 3);
+  controls.enabled = camMode === 'orbit';
+  if (camMode === 'top') {
+    camera.position.lerp(tmp.set(N / 2, 78, N / 2 + 0.01), k);
+    controls.target.lerp(new THREE.Vector3(N / 2, 0, N / 2), k);
+    camera.lookAt(controls.target);
+  } else if (camMode.startsWith('uav')) {
+    const u = +camMode.slice(3), d = objs.drones[u], p = d.root.position, yaw = d.yaw.rotation.y;
+    const want = new THREE.Vector3(p.x - Math.cos(yaw) * 9, p.y + 6.5, p.z + Math.sin(yaw) * 9);
+    camera.position.lerp(want, k);
+    controls.target.lerp(p, k);
+    camera.lookAt(controls.target);
+  } else {
+    controls.update();
+  }
+}
+
+// ------------------------------------------------------------------ wiring
+const list = window.UAV_EPISODE_LIST || [];
+const sel = $('episode');
+sel.innerHTML = list.map((it) => `<option value="${it.id}">${it.label}</option>`).join('');
+$('speed').innerHTML = SPEEDS.map((s) => `<option value="${s}"${s === speed ? ' selected' : ''}>${s} steps/s</option>`).join('');
+
+function loadScript(src) {
+  return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error(src)); document.head.appendChild(s); });
+}
+const decoded = {};
+async function openEpisode(id) {
+  const item = list.find((x) => x.id === id);
+  $('loading').hidden = false; $('loading').textContent = 'Loading episode';
+  try {
+    if (!decoded[id]) { await loadScript(item.file); decoded[id] = decode(window.UAV_EPISODES[id]); }
+  } catch (err) {
+    $('loading').textContent = 'Could not load this episode. Run python visualization/export_web.py and reload.';
+    return;
+  }
+  $('labels').innerHTML = '';
+  ep = decoded[id];
+  const cams = [['orbit', 'Free orbit'], ['top', 'Top down'], ...Array.from({ length: ep.n }, (_, u) => [`uav${u}`, `Follow UAV${u}`])];
+  $('cam').innerHTML = cams.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+  camMode = 'orbit';
+  $('scrub').max = ep.T - 1;
+  layer.ground = ep.kind === 'patrol' ? 'fog' : 'coverage';
+  $('l-ground').value = layer.ground;
+  $('s-fresh-k').textContent = `Seen in last ${ep.raw.freshWindow} steps`;
+  $('inc-section').hidden = !ep.events.length;
+  buildWorld();
+  frameOverview();
+  const fire = ep.events.find((e) => e.kind === 'fire' && e.confirmed > 120);
+  F = fire ? fire.confirmed - 6 : Math.round((ep.T - 1) * 0.3);
+  playing = true; $('play').textContent = 'Pause';
+  $('hud-sub').textContent = item.label;
+  $('loading').hidden = true;
+  resize();
+}
+
+sel.addEventListener('change', () => { openEpisode(sel.value); try { history.replaceState(null, '', `#${sel.value}`); } catch (err) { /* sandboxed */ } });
+$('play').addEventListener('click', () => {
+  if (!ep) return;
+  if (!playing && F >= ep.T - 1) F = 0;
+  playing = !playing; $('play').textContent = playing ? 'Pause' : 'Play';
+});
+$('restart').addEventListener('click', () => { F = 0; playing = true; $('play').textContent = 'Pause'; });
+$('speed').addEventListener('change', (e) => { speed = +e.target.value; });
+$('scrub').addEventListener('input', (e) => { F = +e.target.value; lastPanelFrame = -1; });
+$('cam').addEventListener('change', (e) => { camMode = e.target.value; if (camMode === 'orbit') frameOverview(); });
+for (const [id, key] of [['l-foot', 'foot'], ['l-route', 'route'], ['l-radio', 'radio'], ['l-trail', 'trail'], ['l-tags', 'tags']]) {
+  $(id).addEventListener('change', (e) => { layer[key] = e.target.checked; });
+}
+$('l-ground').addEventListener('change', (e) => { layer.ground = e.target.value; lastGroundKey = ''; });
+window.addEventListener('keydown', (e) => {
+  if (!ep || e.target.closest('select, input[type=range]')) return;
+  if (e.code === 'Space') { e.preventDefault(); $('play').click(); }
+  else if (e.code === 'ArrowRight' || e.code === 'ArrowLeft') {
+    playing = false; $('play').textContent = 'Play';
+    F = clamp(Math.floor(F) + (e.code === 'ArrowRight' ? 1 : -1) * (e.shiftKey ? 10 : 1), 0, ep.T - 1);
+  }
+});
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (ep && objs) {
+    if (playing) {
+      F = Math.min(F + dt * speed, ep.T - 1);
+      if (F >= ep.T - 1) { playing = false; $('play').textContent = 'Play'; }
+    }
+    update(dt, now / 1000);
+    updateCamera(dt);
+    const N = ep.N;
+    sun.position.set(N / 2 - 30, 60, N / 2 - 20); sun.target.position.set(N / 2, 0, N / 2);
+    renderer.render(scene, camera);
+  }
+  requestAnimationFrame(loop);
+}
+const wanted = list.find((it) => it.id === window.location.hash.slice(1));
+if (wanted) sel.value = wanted.id;
+if (list.length) openEpisode((wanted || list[0]).id); else $('loading').textContent = 'No episodes found. Run python visualization/export_web.py first.';
+requestAnimationFrame(loop);
+})();
+</script>

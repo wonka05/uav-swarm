@@ -60,6 +60,8 @@ NEIGHBOURS = ((1, 0, 1), (-1, 0, 1), (0, 1, 1), (0, -1, 1),
 
 DOCKED, EXPLORE, RETURN, STRANDED, TRACK = "docked", "explore", "return", "stranded", "track"
 AIRBORNE = (EXPLORE, RETURN, TRACK)
+# who produced a UAV's action in a step (stored in recordings as "flown_by")
+FLOWN_BY = {"policy": 0, "planner": 1, RETURN: 2, DOCKED: 3, STRANDED: 4, TRACK: 5}
 
 
 @dataclass
@@ -276,6 +278,12 @@ class MissionController:
             if self.mode[i] in AIRBORNE:
                 self.flying_steps += 1
 
+        # for recordings: who produced each UAV's action, and the action before the safety check
+        self.flown_by = [FLOWN_BY[self.mode[i]] if self.mode[i] != EXPLORE else
+                         (FLOWN_BY["planner"] if self.target[i] is not None else FLOWN_BY["policy"])
+                         for i in range(self.n)]
+        self.last_proposed = [np.asarray(a, dtype=np.float32).copy() for a in acts]
+        self.last_changed = [False] * self.n
         if cfg.safety:
             # returning UAVs (lowest battery first) get right of way, then trackers, then the rest
             flying = [m in AIRBORNE for m in self.mode]
@@ -283,6 +291,7 @@ class MissionController:
             order = sorted(range(self.n), key=lambda i: (rank.get(self.mode[i], 2),
                                                          env.uavs[i].battery if self.mode[i] == RETURN else 0.0, i))
             acts = self.supervisor.filter(env.grid, pos, acts, flying, order)
+            self.last_changed = list(self.supervisor.last_changed)
 
         self._coverage_before = env.coverage_map.copy()
         return acts

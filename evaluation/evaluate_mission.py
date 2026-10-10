@@ -25,7 +25,8 @@ A mission ends when coverage reaches the target (default: the environment's
 coverage_threshold, 0.95; --coverage-target 1.0 asks for every cell). Arms 1-2
 keep the 500-step limit; arms 3-6 run up to --mission-steps. The maps are
 fixed by replaying evaluate.py first whenever arm 1 is not run at the default
-target. Nothing is trained or written to disk.
+target. Nothing is trained; --output saves every map's results as JSON for
+evaluation/build_report.py.
 
 Besides coverage, every arm reports what would hurt real drones: obstacle hits
 (total blocked moves, not the final-step snapshot), squeezes between touching
@@ -35,6 +36,8 @@ between airborne UAVs.
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import time
 
 import numpy as np
@@ -161,6 +164,7 @@ def main():
                    help="arms 6-8: unproductive steps before the planner takes over")
     p.add_argument("--patrol-steps", type=int, default=1500, help="arms 7-8: length of a patrol mission")
     p.add_argument("--spare-packs", type=int, default=3, help="arm 7: charged spare batteries at the base")
+    p.add_argument("--output", help="also save every map's results as JSON (read by evaluation/build_report.py)")
     args = p.parse_args()
     selected = sorted({int(a) for a in args.arms.split(",")})
 
@@ -217,6 +221,9 @@ def main():
             states.append(np.random.get_state())
             run_episode(env, agent, replay, env.max_steps)
         env.coverage_threshold = target              # in memory only; the config is untouched
+    saved = {"checkpoint": args.checkpoint, "maps": n, "coverage_target": target,
+             "settings": {k: v for k, v in vars(args).items() if k not in ("output", "arms", "checkpoint")},
+             "arms": {}}
     for a in selected:
         name, mcfg, max_steps = arms[a]
         ctrl = MissionController(mcfg, env.grid_size, env.n_agents)
@@ -231,6 +238,18 @@ def main():
                 print(f"  [{a}] {ep + 1}/{n} maps", flush=True)
         print(f"\n[{name}] finished in {time.time() - t0:.0f}s", flush=True)
         summarise(name, res)
+        if args.output:                              # rewritten after every arm, so a long run keeps what it has
+            saved["arms"][str(a)] = {"name": name, "results": [{k: to_json(v) for k, v in r.items()} for r in res]}
+            os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
+            with open(args.output, "w") as f:
+                json.dump(saved, f, indent=1)
+            print(f"Saved {args.output}", flush=True)
+
+
+def to_json(v):
+    """NumPy scalars and NaN as plain JSON values."""
+    v = v.item() if isinstance(v, np.generic) else v
+    return None if isinstance(v, float) and np.isnan(v) else v
 
 
 if __name__ == "__main__":

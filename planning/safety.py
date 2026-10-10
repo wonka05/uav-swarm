@@ -99,6 +99,26 @@ def robust_follow(grid, field, pos):
     return (step / max(1.0, float(np.linalg.norm(step)))).astype(np.float32)
 
 
+def route_cells(field, start, max_len=30):
+    """The cells a UAV following `field` from `start` will pass through (for drawing a planned route)."""
+    size = field.shape[0]
+    path, cur = [start], start
+    for _ in range(max_len):
+        d = field[cur]
+        if not np.isfinite(d) or d == 0:
+            break
+        best, best_val = None, d
+        for dx, dy, _ in NEIGHBOURS:
+            a, b = cur[0] + dx, cur[1] + dy
+            if 0 <= a < size and 0 <= b < size and field[a, b] < best_val - 1e-9:
+                best, best_val = (a, b), field[a, b]
+        if best is None:
+            break
+        path.append(best)
+        cur = best
+    return path
+
+
 def path_clear(grid, p0, p1, spacing=0.05, skip_start=False):
     """True if the straight move p0 -> p1 crosses no obstacle and squeezes past no corner.
 
@@ -161,6 +181,7 @@ class SafetySupervisor:
     def filter(self, grid, positions, actions, flying, order):
         size = grid.shape[0]
         acts = [np.asarray(a, dtype=np.float32) for a in actions]
+        self.last_changed = [False] * len(acts)      # which actions this call had to change
         planned = {}                                 # uav -> (end, midpoint)
         for i in order:
             if not flying[i]:
@@ -193,6 +214,7 @@ class SafetySupervisor:
                 chosen = fallback if fallback is not None else np.zeros(2, dtype=np.float32)
             if not np.allclose(chosen, v, atol=1e-6):
                 self.interventions += 1
+                self.last_changed[i] = True
             acts[i] = chosen
             planned[i] = (p + chosen, p + chosen / 2)
         return acts

@@ -86,12 +86,12 @@ class EventField:
 
     def _move_intruder(self, e):
         size = self.grid.shape[0]
-        for _ in range(8):                              # keep heading; turn when blocked
+        for _ in range(8):                              # keep heading; turn at trees and the map edge
             if self.rng.random() < 0.05:
                 ang = self.rng.uniform(0, 2 * np.pi)
                 e.heading = np.array([np.cos(ang), np.sin(ang)], dtype=np.float32)
-            new = np.clip(e.pos + e.heading * self.cfg.intruder_speed, 0.0, size - 1.0)
-            if self.grid[int(new[0]), int(new[1])] != OBSTACLE:
+            new = e.pos + e.heading * self.cfg.intruder_speed
+            if (new >= 0.0).all() and (new < size).all() and self.grid[int(new[0]), int(new[1])] != OBSTACLE:
                 e.pos = new.astype(np.float32)
                 return
             ang = self.rng.uniform(0, 2 * np.pi)

@@ -3,11 +3,21 @@
 Usage:
     python visualization/record_episode.py --seed <seed> --output <path.npz>
         [--mission] [--coverage-target 1.0] [--safety] [--position-noise 0.1] [--smart-planner]
+    python visualization/record_episode.py --seed <seed> --output <path.npz> --patrol
+        [--patrol-steps 1500] [--spare-packs 3] [--no-events]
 
 With --mission the policy runs under planning/mission_controller.py (staggered
 launch, return-to-home, recharging and the coverage override), the episode
 runs until coverage reaches the target or --mission-steps pass, and each
-frame also records every UAV's mission mode for the dashboard.
+frame also records every UAV's mission mode and, for the dashboard, who flew
+it (policy / planner / returning / tracking), its target and planned route,
+the action it proposed and whether the safety layer changed it.
+
+--patrol records a persistent-surveillance mission: all UAVs launch together,
+spare batteries are swapped at the base, the planner keeps revisiting the
+ground seen longest ago, and fires and intruders appear at random. The
+recording then also holds when every cell was last seen and the full history
+of every event.
 --coverage-target replaces the environment's coverage_threshold (0.95) for
 this recording only; the config file is not changed.
 
@@ -36,11 +46,13 @@ from env.forest_env import ForestEnv
 from env.grid import OBSTACLE
 from agents.maddpg import MADDPG
 from planning.voronoi_planner import VoronoiPlanner
-from planning.mission_controller import (MissionConfig, MissionController,
-                                         EXPLORE, RETURN, DOCKED, STRANDED)
+from planning.mission_controller import (MissionConfig, MissionController, FLOWN_BY,
+                                         EXPLORE, RETURN, DOCKED, STRANDED, TRACK)
+from planning.safety import route_cells
 
 # mission mode codes stored in the .npz "mode" array (read by pygame_dashboard.py)
-MODE_CODES = {EXPLORE: 0, RETURN: 1, DOCKED: 2, STRANDED: 3}
+MODE_CODES = {EXPLORE: 0, RETURN: 1, DOCKED: 2, STRANDED: 3, TRACK: 4}
+ROUTE_LEN = 30                       # planned-route cells stored per UAV per frame
 
 CONFIG_PATH = os.path.join(ROOT, "configs", "default.yaml")
 CHECKPOINT_PATH = os.path.join(ROOT, "checkpoints", "final1500", "maddpg_best.pt")
@@ -74,7 +86,79 @@ def snapshot(env, ctrl=None):
     }
     if ctrl is not None:
         frame["mode"] = np.array([MODE_CODES[m] for m in ctrl.mode], dtype=np.int8)
+        frame.update(_planner_view(env, ctrl))
     return frame
+
+
+def _planner_view(env, ctrl):
+    """What the mission layer intends for every UAV: who flew it, its target and route."""
+    n = env.n_agents
+    flown = getattr(ctrl, "flown_by", None)
+    if flown is None:                                # frame 0: nothing has been flown yet
+        flown = [FLOWN_BY[DOCKED] if m == DOCKED else FLOWN_BY["policy"] for m in ctrl.mode]
+    targets = np.full((n, 2), -1, dtype=np.int16)
+    routes = np.full((n, ROUTE_LEN + 1, 2), -1, dtype=np.int8)
+    track = np.full(n, -1, dtype=np.int16)
+    for i, u in enumerate(env.uavs):
+        field, goal = None, None
+        if ctrl.mode[i] == EXPLORE and ctrl.target[i] is not None:
+            field, goal = ctrl.route[i], ctrl.target[i]
+        elif ctrl.mode[i] == RETURN:
+            field = ctrl._home_field(i)
+            goal = ctrl.pads[i] if ctrl.cfg.safety else BASE_POSITION
+        elif ctrl.mode[i] == TRACK and ctrl.track_event[i] is not None:
+            field, goal = ctrl.track_route[i], ctrl.track_cell[i]
+            track[i] = ctrl.track_event[i].id
+        if goal is not None:
+            targets[i] = goal
+            cells = route_cells(field, u.grid_pos, ROUTE_LEN)
+            routes[i, :len(cells)] = cells
+    frame = {
+        "flown_by": np.array(flown, dtype=np.int8),
+        "targets": targets,
+        "routes": routes,
+        "track_event": track,
+        "proposed": np.array(getattr(ctrl, "last_proposed", np.zeros((n, 2))), dtype=np.float32),
+        "corrected": np.array(getattr(ctrl, "last_changed", [False] * n), dtype=bool),
+    }
+    if ctrl.cfg.patrol:
+        frame["last_seen"] = ctrl.last_seen.astype(np.int16)
+    if ctrl.cfg.spare_packs:
+        frame["packs"] = np.array(ctrl.packs, dtype=np.float32)
+    return frame
+
+
+def _event_rows(ctrl):
+    """Every event's state this frame: (id, kind, row, col, radius, detected, confirmed, tracker)."""
+    if ctrl is None or ctrl.events is None:
+        return []
+    return [(e.id, e.kind, float(e.pos[0]), float(e.pos[1]), float(e.radius),
+             -1 if e.detected is None else e.detected, -1 if e.confirmed is None else e.confirmed,
+             -1 if e.tracker is None else e.tracker) for e in ctrl.events.events]
+
+
+def _event_arrays(rows_per_frame):
+    """Per-frame event rows -> fixed arrays; NaN / -1 before an event exists."""
+    n_events = max((len(r) for r in rows_per_frame), default=0)
+    T = len(rows_per_frame)
+    pos = np.full((T, n_events, 2), np.nan, dtype=np.float32)
+    radius = np.full((T, n_events), np.nan, dtype=np.float32)
+    tracker = np.full((T, n_events), -1, dtype=np.int16)
+    kinds = np.full(n_events, "", dtype="<U8")
+    spawn = np.full(n_events, -1, dtype=np.int32)
+    detected = np.full(n_events, -1, dtype=np.int32)
+    confirmed = np.full(n_events, -1, dtype=np.int32)
+    for t, rows in enumerate(rows_per_frame):
+        for (k, kind, r, c, rad, det, conf, trk) in rows:
+            if spawn[k] < 0:
+                spawn[k], kinds[k] = t, kind
+            pos[t, k] = (r, c)
+            radius[t, k] = rad
+            tracker[t, k] = trk
+            detected[k], confirmed[k] = det, conf
+    return {"event_kind": kinds, "event_spawn": spawn, "event_detected": detected,
+            "event_confirmed": confirmed, "event_pos": pos, "event_radius": radius,
+            "event_tracker": tracker}
 
 
 def record(seed, output, mission=None, mission_steps=1500, coverage_target=None):
@@ -104,6 +188,7 @@ def record(seed, output, mission=None, mission_steps=1500, coverage_target=None)
     planner.assign_regions(env.region_seeds)
 
     frames = [snapshot(env, ctrl)]
+    events = [_event_rows(ctrl)]
     actions = [np.zeros((env.n_agents, 2), dtype=np.float32)]
     rewards = [np.zeros(env.n_agents, dtype=np.float32)]
     coverage = [0.0]
@@ -115,11 +200,13 @@ def record(seed, output, mission=None, mission_steps=1500, coverage_target=None)
             acts = ctrl.actions(env, acts)
         obs, step_rewards, done, info = env.step(acts)
         if ctrl is not None:
-            # the mission ends at the coverage threshold or when no UAV can fly again;
-            # the environment's own step limit and "all inactive" check do not apply
+            # the mission ends at the coverage threshold (never, for a patrol) or when no UAV
+            # can fly again; the environment's own step limit and "all inactive" check do not apply
             obs = ctrl.after_step(env, t)
-            done = info["coverage_rate"] >= env.coverage_threshold or ctrl.finished()
+            reached = info["coverage_rate"] >= env.coverage_threshold and not mission.patrol
+            done = reached or ctrl.finished()
         frames.append(snapshot(env, ctrl))
+        events.append(_event_rows(ctrl))
         actions.append(np.array(acts, dtype=np.float32))
         rewards.append(np.asarray(step_rewards, dtype=np.float32))
         coverage.append(float(info["coverage_rate"]))
@@ -154,6 +241,12 @@ def record(seed, output, mission=None, mission_steps=1500, coverage_target=None)
         metadata["controller"] = "mission"
         metadata["mission"] = {**mission.__dict__, "mission_steps": mission_steps}
         metadata["mode_codes"] = {name: code for name, code in MODE_CODES.items()}
+        metadata["flown_by_codes"] = dict(FLOWN_BY)
+        metadata["route_len"] = ROUTE_LEN
+        if mission.safety:
+            metadata["pads"] = [list(p) for p in ctrl.pads]
+        if mission.patrol:
+            metadata["fresh_window"] = mission.fresh_window
 
     out_dir = os.path.dirname(os.path.abspath(output))
     os.makedirs(out_dir, exist_ok=True)
@@ -187,7 +280,9 @@ def record(seed, output, mission=None, mission_steps=1500, coverage_target=None)
         region_masks=(planner.masks > 0.5),
         base_position=np.array(BASE_POSITION, dtype=np.int32),
         metadata=np.array(json.dumps(metadata)),
-        **({"mode": stack["mode"]} if ctrl is not None else {}),
+        **{k: stack[k] for k in ("mode", "flown_by", "targets", "routes", "track_event", "proposed",
+                                 "corrected", "last_seen", "packs") if k in stack},
+        **(_event_arrays(events) if ctrl is not None and ctrl.events is not None else {}),
     )
 
     print(f"Checkpoint loaded:  {metadata['checkpoint']}")
@@ -201,6 +296,13 @@ def record(seed, output, mission=None, mission_steps=1500, coverage_target=None)
         print(f"UAVs lost:          {ctrl.unable_to_return(env)}")
         if mission.safety:
             print(f"Safety corrections: {ctrl.interventions()}")
+        extra = ctrl.extra_stats()
+        if "recent_share" in extra:
+            print(f"Seen recently:      {extra['recent_share']:.1%} of the forest seen within the last "
+                  f"{mission.fresh_window} steps (second-half average), {extra['swaps']} battery swaps")
+        if "events" in extra:
+            print(f"Events:             {extra['events_detected']}/{extra['events']} detected, "
+                  f"mean time to detect {extra['detect_delay_mean']:.0f} steps")
     print(f"Output file:        {os.path.abspath(output)}")
     return output
 
@@ -224,7 +326,20 @@ def main():
     parser.add_argument("--smart-planner", action="store_true",
                         help="with --mission: targets that reveal most ground per distance, kept "
                              "until fresh ground, taken over after 3 unproductive steps")
+    parser.add_argument("--patrol", action="store_true",
+                        help="persistent surveillance with fires and intruders; implies --mission "
+                             "--safety --smart-planner and launches every UAV at once")
+    parser.add_argument("--patrol-steps", type=int, default=1500)
+    parser.add_argument("--spare-packs", type=int, default=3, help="with --patrol: spare batteries at the base")
+    parser.add_argument("--no-events", action="store_true", help="with --patrol: no fires or intruders")
     args = parser.parse_args()
+    if args.patrol:
+        mission = MissionConfig(launch_gap=0, recharge_steps=args.recharge_steps, reserve_steps=args.reserve,
+                                safety=True, position_noise=args.position_noise, gain_targets=True,
+                                chain_targets=True, stall_limit=3, patrol=True,
+                                events=not args.no_events, spare_packs=args.spare_packs)
+        record(args.seed, args.output, mission, args.patrol_steps, args.coverage_target)
+        return
     if (args.safety or args.position_noise or args.smart_planner) and not args.mission:
         parser.error("--safety, --position-noise and --smart-planner need --mission")
     mission = None
