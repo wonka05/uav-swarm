@@ -6,7 +6,7 @@ from agents.maddpg import MADDPG
 
 
 CONFIG_PATH = "configs/default.yaml"
-CHECKPOINT_PATH = "checkpoints/fix300/maddpg_best.pt"
+CHECKPOINT_PATH = "checkpoints/final1500/maddpg_best.pt"
 
 
 def main():
