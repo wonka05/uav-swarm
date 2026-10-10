@@ -58,6 +58,8 @@ def run_episode(env, agent, ctrl, max_steps):
     obs = ctrl.reset(env)
     field_counts = []
     hits = squeezes = clamps = near = 0
+    over_fire = over_known_fire = 0                  # airborne UAV-steps above burning ground
+    watch_gap, intruder_gap = np.inf, np.inf         # closest a UAV came to a fire's edge / an intruder it knew of
     size = env.grid_size
     info = {}
     for t in range(1, max_steps + 1):
@@ -86,12 +88,32 @@ def run_episode(env, agent, ctrl, max_steps):
             for j in range(i + 1, len(airborne)):
                 near += int(np.linalg.norm(airborne[i] - airborne[j]) < NEAR_MISS)
         field_counts.append(ctrl.in_field())
-        # patrol missions have no finish line: they run until max_steps
-        if (not ctrl.cfg.patrol and info["coverage_rate"] >= env.coverage_threshold) or ctrl.finished():
+        if ctrl.events is not None:
+            for u in env.uavs:
+                if not u.is_active:
+                    continue
+                for e in ctrl.events.events:
+                    gap = float(np.linalg.norm(u.pos - e.pos)) - e.radius
+                    if e.kind == "fire":
+                        if gap <= 0:
+                            over_fire += 1
+                            over_known_fire += int(e.detected is not None and e.detected < t)
+                        if e.confirmed is not None:
+                            watch_gap = min(watch_gap, gap)
+                    elif e.detected is not None:
+                        intruder_gap = min(intruder_gap, gap)
+        # patrol missions have no finish line: they run until max_steps. With position error a
+        # mission ends when the coverage the controller believes it has reaches the target
+        if (not ctrl.cfg.patrol and ctrl.coverage_estimate(env, info) >= env.coverage_threshold) or ctrl.finished():
             break
     field = np.array(field_counts)
-    return ctrl.extra_stats() | {
+    fire = {} if ctrl.events is None else {
+        "over_fire": over_fire, "over_known_fire": over_known_fire,
+        "watch_gap_min": None if np.isinf(watch_gap) else watch_gap,
+        "intruder_gap_min": None if np.isinf(intruder_gap) else intruder_gap}
+    return ctrl.extra_stats() | ctrl.field_stats() | fire | {
         "coverage": info["coverage_rate"],
+        "coverage_believed": ctrl.coverage_estimate(env, info),
         "detection": info["targets_detected"],
         "collisions": info["collision_count"],
         "length": t,
@@ -144,6 +166,21 @@ def summarise(name, res):
         print(f"Time to detect:       mean {np.nanmean(g('detect_delay_mean')):.0f} steps, "
               f"worst {np.nanmax(g('detect_delay_max')):.0f} steps")
         print(f"Time to confirm:      mean {np.nanmean(g('confirm_delay_mean')):.0f} steps after detection")
+        print(f"Above burning ground: {g('over_fire').mean():.1f} UAV-steps per mission "
+              f"({g('over_known_fire').mean():.1f} after the fire was detected)")
+        gaps = np.array([r['watch_gap_min'] for r in res if r.get('watch_gap_min') is not None], dtype=float)
+        igaps = np.array([r['intruder_gap_min'] for r in res if r.get('intruder_gap_min') is not None], dtype=float)
+        if gaps.size:
+            print(f"Closest to a fire's edge after confirming: {gaps.min():.1f} cells (mean of missions {gaps.mean():.1f})")
+        if igaps.size:
+            print(f"Closest to a known intruder: {igaps.min():.1f} cells (mean of missions {igaps.mean():.1f})")
+        print(f"Incidents abandoned before confirming: {g('abandoned').sum():.0f}, hand-overs: {g('handovers').sum():.0f}, "
+              f"steps escaping a fire zone: {g('escape_steps').mean():.1f} per mission")
+    if "boosts" in res[0]:
+        print(f"Stuck returns:        right of way {g('boosts').sum():.0f}, pad swaps {g('pad_switches').sum():.0f}, "
+              f"emergency landings {g('emergency_landings').sum():.0f} (all missions)")
+    if (g('coverage_believed') != cov).any():
+        print(f"Believed coverage:    {g('coverage_believed').mean():.1%} (true {cov.mean():.1%})")
 
 
 def main():

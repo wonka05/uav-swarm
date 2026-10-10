@@ -74,11 +74,12 @@ FIRE_C = (255, 120, 40)
 INTRUDER_C = (200, 110, 255)
 INCIDENT_COLORS = {"fire": FIRE_C, "intruder": INTRUDER_C}
 # mission mode codes written by record_episode.py
-EXPLORE, RETURN, DOCKED, STRANDED, TRACK = 0, 1, 2, 3, 4
+EXPLORE, RETURN, DOCKED, STRANDED, TRACK, LANDED = 0, 1, 2, 3, 4, 5
 # who flew a drone, by the names record_episode.py stores in metadata["flown_by_codes"]
 FLOWN_STYLE = {"policy": ("POLICY", "AI", GREEN), "planner": ("PLANNER", "PL", PLAN_C),
                "return": ("RETURN", "RTH", HOME), "docked": ("DOCKED", "", MUTED),
-               "stranded": ("LOST", "", LOST), "track": ("TRACKING", "TRK", TRACK_C)}
+               "stranded": ("LOST", "", LOST), "track": ("TRACKING", "TRK", TRACK_C),
+               "landed": ("LANDED", "", AMBER)}
 UAV_COLORS = [(31, 119, 180), (255, 127, 14), (44, 160, 44), (214, 39, 40), (148, 103, 189)]
 TYPE_COLORS = {"animal": (74, 163, 255), "fire": (228, 87, 46), "poi": (175, 183, 191)}
 TYPE_LABELS = {"animal": "Animals", "fire": "Fire", "poi": "Points of interest"}
@@ -149,6 +150,8 @@ def build_events(ep):
                     txt, col = ("landed for a battery swap", MUTED) if swaps else ("docked, recharging", MUTED)
                 elif new == STRANDED:
                     txt, col = "LOST (battery empty in the field)", LOST
+                elif new == LANDED:
+                    txt, col = "made an emergency landing (could not get home)", AMBER
                 else:
                     k = int(ep["track_event"][f, u])
                     txt, col = f"sent to confirm {kinds[k].upper()} #{k}", TRACK_C
@@ -1095,6 +1098,8 @@ class Dashboard:
         m = int(ep["mode"][f, u]) if self.mission else None
         if m == STRANDED:
             return "LOST", LOST
+        if m == LANDED:
+            return "LANDED OUT", AMBER
         if m == DOCKED:
             if frac >= 0.999:
                 return "DOCKED", MUTED
