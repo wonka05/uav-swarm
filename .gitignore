@@ -1,8 +1,12 @@
 venv/
-checkpoints/
+checkpoints/*
 logs/
 *.pt
 *.pth
+# ...except the trained model the final system runs on
+!checkpoints/final1500/
+checkpoints/final1500/*
+!checkpoints/final1500/maddpg_best.pt
 runs/
 __pycache__/
 *.pyc
